@@ -1,0 +1,10 @@
+analyzer:
+  exclude:
+    - lib/dashboard_shell.dart
+    - lib/screens/**
+    - lib/widgets/**
+    - lib/services/ai_vision_service.dart
+    - lib/services/ingredient_label_service.dart
+    - lib/recognition_page_pro.dart
+    - lib/ingredient_label_page_pro.dart
+    - lib/profile_edit_page.dart
