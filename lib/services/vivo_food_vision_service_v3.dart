@@ -19,7 +19,7 @@ class VivoFoodVisionServiceV3 {
     'AI_API_URL',
     defaultValue: 'https://api-ai.vivo.com.cn/v1/chat/completions',
   );
-  static const String fallbackVisionModel = 'Volc-DeepSeek-V3.2';
+  static const String fallbackVisionModel = 'Doubao-Seed-2.0-mini';
   static const String model = String.fromEnvironment(
     'AI_VISION_MODEL',
     defaultValue: fallbackVisionModel,

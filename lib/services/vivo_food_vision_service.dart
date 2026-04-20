@@ -18,7 +18,7 @@ class VivoFoodVisionService {
   );
   static const String model = String.fromEnvironment(
     'AI_VISION_MODEL',
-    defaultValue: 'Volc-DeepSeek-V3.2',
+    defaultValue: 'Doubao-Seed-2.0-mini',
   );
 
   static bool get isConfigured => apiKey.trim().isNotEmpty;

@@ -46,7 +46,9 @@ flutter run --dart-define=AI_API_KEY=你的Key
 flutter run ^
   --dart-define=AI_API_KEY=你的Key ^
   --dart-define=AI_API_URL=https://你的接口地址/v1/chat/completions ^
-  --dart-define=AI_VISION_MODEL=你的视觉模型名
+  --dart-define=AI_VISION_MODEL=Doubao-Seed-2.0-mini
 ```
+
+如果不额外传 `AI_VISION_MODEL`，拍照识别默认会使用 `Doubao-Seed-2.0-mini`。
 
 如果没有配置 `AI_API_KEY`，应用会自动退回到本地演示识别模式。
