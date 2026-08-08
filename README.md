@@ -1,54 +1,57 @@
-# AI Glasses Nutrition App
+# AI Glasses Monorepo
 
-一个使用 Flutter 构建的 Android 原型应用，用于模拟：
+This repository contains the two local-network apps for the AI glasses food
+capture prototype.
 
-- 连接 AI 眼镜
-- 拍摄餐食
-- 自动识别菜品和营养成分
-- 汇总每日热量与三大营养素
-- 结合用户档案给出饮食建议
+## Folders
 
-## 当前版本
+- `phone-app/`: Flutter Android phone app. It hosts the local HTTP/WebRTC
+  receiver, renders the RV101 live preview, receives JPEG captures, and runs the
+  phone-side coarse scene classifier.
+- `glasses-app/`: Rokid RV101 Android app. It captures Camera2 preview frames,
+  publishes WebRTC video, reports low-rate JPEG frames to the phone, and handles
+  high-resolution JPEG capture/upload.
 
-这个版本是可运行的 UI 原型，已经包含完整的产品闭环与演示数据：
+## Current Runtime Flow
 
-- 首页
-- 日历
-- 健康分析
-- 档案
-- 中间识别入口
+1. Put the phone and RV101 on the same Wi-Fi network or phone hotspot.
+2. Open the phone app and enter `识别 -> 实时预览`.
+3. The phone listens on port `8080`, scans the local subnet, and sends a start
+   request to the RV101 control server on `8088`.
+4. The RV101 starts Camera2 capture and WebRTC preview.
+5. The RV101 sends low-rate scene frames to
+   `POST /api/v1/scene/frames`; the phone app classifies OK/open-palm gestures
+   locally with MediaPipe.
+6. High-resolution JPEG capture still flows through
+   `POST /api/v1/captures` and then into the original AI food analysis path.
 
-## 打开方式
+The old RV101-side fruit model has been removed. Coarse scene classification now
+runs on the phone:
 
-1. 用 Android Studio 打开当前目录 `D:\program\AI-glasses`
-2. 等待 Gradle 和 Flutter 索引完成
-3. 执行 `flutter pub get`
-4. 连接 Android 模拟器或真机后运行
+- OK gesture: ingredient-label/OCR mode.
+- Open palm: eating-environment mode.
+- Other frames: waiting/unknown.
 
-## 已新增能力
+## Build
 
-- 支持浅色模式，默认使用浅色模式
-- 个人档案页可以切换浅色 / 深色
-- 中间相机按钮支持拍照和从相册选图
-- 识别页支持调用 AI 视觉接口分析餐食
+Phone app:
 
-## AI 识图配置
-
-当前代码支持通过 `--dart-define` 配置一个 OpenAI 兼容的视觉接口：
-
-```bash
-flutter run --dart-define=AI_API_KEY=你的Key
+```powershell
+cd phone-app
+flutter pub get
+flutter build apk --debug
 ```
 
-可选参数：
+RV101 glasses app:
 
-```bash
-flutter run ^
-  --dart-define=AI_API_KEY=你的Key ^
-  --dart-define=AI_API_URL=https://你的接口地址/v1/chat/completions ^
-  --dart-define=AI_VISION_MODEL=Doubao-Seed-2.0-mini
+```powershell
+cd glasses-app
+.\gradlew.bat :app:assembleDebug --console=plain
 ```
 
-如果不额外传 `AI_VISION_MODEL`，拍照识别默认会使用 `Doubao-Seed-2.0-mini`。
+Always install with an explicit device serial:
 
-如果没有配置 `AI_API_KEY`，应用会自动退回到本地演示识别模式。
+```powershell
+adb -s <phone-serial> install -r phone-app\build\app\outputs\flutter-apk\app-debug.apk
+adb -s <rv101-serial> install -r glasses-app\app\build\outputs\apk\debug\app-debug.apk
+```

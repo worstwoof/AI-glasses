@@ -26,10 +26,18 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+**/build/
 /coverage/
 
 # Android Studio will place build artifacts here
 /android/app/debug
 /android/app/profile
 /android/app/release
+**/.gradle/
+**/.kotlin/
+**/local.properties
+apk-share/
+screenshots/
+*.apk
+*.aab
 
