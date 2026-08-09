@@ -30,9 +30,11 @@ No relevant teammate commit or branch was available in accessible refs.
 2. Gesture sampling: Camera2 preview -> PreviewFrameReporter -> `/api/v1/scene/frames` -> phone MediaPipe. Existing interval remains 1000 ms and JPEG quality remains 58.
 3. Business capture: DataChannel capture command -> existing CaptureRequest/Camera2 still path -> PhotoUploader -> `/api/v1/captures` -> GlassReceiverService.
 
-The controller never stops the camera, WebRTC publisher, PreviewFrameReporter, or MediaPipe classifier.
+The controller never stops the camera, WebRTC publisher, PreviewFrameReporter, or MediaPipe classifier. User-visible failures are `餐前抓拍失败，请重新张手开始` and `餐后抓拍失败，请再次握拳结束`.
 
 ## 5. Gesture Logic
+
+The controller emits compact [Gesture], [EatingSession], and [MealCapture] logs with gesture counts, state, scene, trigger, session ID, and success/failure status.
 
 PhoneSceneClassifier now returns `gesture=fist` with `scene=unknown`. The new geometry classifier checks OK first, open palm second, and FIST third. FIST requires all four primary fingers to be folded relative to the wrist/palm scale and uses a fingertip cluster check; it is not a single absolute y-coordinate rule. Existing OK and OPEN_PALM behavior remains.
 
@@ -90,12 +92,12 @@ RecognitionPageFast now shows the Eating Session state, pending scene, session I
 
 Executed:
 
-- `flutter test test/eating_session_controller_test.dart test/packaging_capture_trigger_policy_test.dart test/capture_type_test.dart` -> 10 tests passed.
-- `flutter analyze --no-fatal-infos --no-fatal-warnings` -> exit 0; only existing/deprecation info diagnostics remained.
+- `flutter test test/eating_session_controller_test.dart` -> 8 tests passed after recovery/logging coverage was added.
+- `flutter analyze --no-fatal-infos --no-fatal-warnings` -> exit 0; 73 deprecation info diagnostics, no errors.
 - `glasses-app\\gradlew.bat :app:testDebugUnitTest --console=plain` with `ANDROID_HOME=D:\\AndroidSDK` -> BUILD SUCCESSFUL; all glasses Kotlin tests passed.
 - Kotlin standalone `GestureLandmarkClassifier` smoke fixture -> OK, OPEN_PALM, and FIST checks passed.
 
-The phone Android JUnit task and phone APK build were attempted but exceeded the environment timeout without output. They are recorded as NOT RUN/NOT VERIFIED rather than inferred from Flutter tests.
+The phone Android JUnit task reached Gradle configuration but failed because the project build directory and Pub cache are on different Windows roots (`D:` versus `C:`). The phone Flutter APK build was attempted for 240 seconds and timed out without output. Both remain NOT RUN/NOT VERIFIED.
 
 ## 15. Hardware Status
 
@@ -112,14 +114,14 @@ See [`docs/eating_session_hardware_test_plan.md`](docs/eating_session_hardware_t
 - Two-second settle experience and hand still visible at capture time.
 - Camera2 still capture latency/fallback and its effect on perceived WebRTC smoothness.
 - Upload ACK latency, disconnect/reconnect timing, and malformed or mismatched metadata.
-- Phone APK/native Gradle verification remains pending in this environment.
+- Phone APK/native Gradle verification remains pending because of the cross-root Gradle configuration and APK timeout.
 
 
 ## Final Validation Update
 
 After the report draft was written, the following additional commands were executed:
 
-- flutter test -> 39 tests passed.
+- flutter test -> 42 tests passed.
 - glasses-app\gradlew.bat :app:compileDebugKotlin :app:compileDebugUnitTestKotlin with ANDROID_HOME=D:\AndroidSDK -> BUILD SUCCESSFUL.
 - glasses-app\gradlew.bat :app:assembleDebug with ANDROID_HOME=D:\AndroidSDK -> BUILD SUCCESSFUL.
 - The phone Flutter APK build was attempted for 300 seconds and timed out without Gradle output; no APK success is claimed.

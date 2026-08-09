@@ -167,7 +167,7 @@ void main() {
         controller.onGesture('open_palm');
         await _pumpTimers();
         expect(controller.state, EatingSessionState.idle);
-        expect(controller.errorMessage, contains('发送'));
+        expect(controller.errorMessage, '餐前抓拍失败，请重新张手开始');
 
         shouldSend = true;
         controller.onGesture('open_palm');
@@ -194,6 +194,98 @@ void main() {
         expect(controller.state, EatingSessionState.eating);
       },
     );
+
+    test('does not duplicate captures while starting or ending', () async {
+      final commands = <MealCaptureCommand>[];
+      final controller = EatingSessionController(
+        settleDelay: Duration.zero,
+        sessionIdGenerator: () => 'meal_single_command',
+        sendCapture: (command) async {
+          commands.add(command);
+          return true;
+        },
+      );
+      addTearDown(controller.dispose);
+
+      controller.onGesture('open_palm');
+      controller.onGesture('open_palm');
+      controller.onGesture('open_palm');
+      await _pumpTimers();
+      expect(commands, hasLength(1));
+
+      controller.onCaptureReceived(
+        const MealCaptureAcknowledgement(
+          captureType: 'food',
+          scene: 'meal_before',
+          mealSessionId: 'meal_single_command',
+        ),
+      );
+      controller.onGesture('fist');
+      controller.onGesture('fist');
+      controller.onGesture('fist');
+      await _pumpTimers();
+      expect(commands, hasLength(2));
+    });
+
+    test('recovers to a stable state when connection is lost', () async {
+      final controller = EatingSessionController(
+        settleDelay: Duration.zero,
+        sessionIdGenerator: () => 'meal_disconnect',
+        sendCapture: (_) async => true,
+      );
+      addTearDown(controller.dispose);
+
+      controller.onGesture('open_palm');
+      controller.onGesture('open_palm');
+      expect(controller.state, EatingSessionState.starting);
+      controller.onConnectionLost();
+      expect(controller.state, EatingSessionState.idle);
+      expect(controller.errorMessage, '餐前抓拍失败，请重新张手开始');
+
+      controller.onGesture('open_palm');
+      controller.onGesture('open_palm');
+      await _pumpTimers();
+      controller.onCaptureReceived(
+        const MealCaptureAcknowledgement(
+          captureType: 'food',
+          scene: 'meal_before',
+          mealSessionId: 'meal_disconnect',
+        ),
+      );
+      controller.onGesture('fist');
+      controller.onGesture('fist');
+      expect(controller.state, EatingSessionState.ending);
+      controller.onConnectionLost();
+      expect(controller.state, EatingSessionState.eating);
+      expect(controller.errorMessage, '餐后抓拍失败，请再次握拳结束');
+    });
+
+    test('returns to eating when meal-after send fails', () async {
+      var allowSend = true;
+      final controller = EatingSessionController(
+        settleDelay: Duration.zero,
+        sessionIdGenerator: () => 'meal_end_send_failure',
+        sendCapture: (_) async => allowSend,
+      );
+      addTearDown(controller.dispose);
+
+      controller.onGesture('open_palm');
+      controller.onGesture('open_palm');
+      await _pumpTimers();
+      controller.onCaptureReceived(
+        const MealCaptureAcknowledgement(
+          captureType: 'food',
+          scene: 'meal_before',
+          mealSessionId: 'meal_end_send_failure',
+        ),
+      );
+      allowSend = false;
+      controller.onGesture('fist');
+      controller.onGesture('fist');
+      await _pumpTimers();
+      expect(controller.state, EatingSessionState.eating);
+      expect(controller.errorMessage, '餐后抓拍失败，请再次握拳结束');
+    });
 
     test('does not start on one open palm or an OK gesture', () {
       final commands = <MealCaptureCommand>[];

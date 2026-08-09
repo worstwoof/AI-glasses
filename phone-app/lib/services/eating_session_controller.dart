@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 enum EatingSessionState { idle, starting, eating, ending }
 
@@ -99,6 +100,7 @@ class EatingSessionController {
         _fistHits = 0;
         if (normalized == 'open_palm') {
           _openPalmHits += 1;
+          _log('[Gesture] OPEN_PALM $_openPalmHits/$requiredGestureHits');
           if (_openPalmHits >= requiredGestureHits) _beginSession();
         } else {
           _openPalmHits = 0;
@@ -110,6 +112,7 @@ class EatingSessionController {
         _openPalmHits = 0;
         if (normalized == 'fist') {
           _fistHits += 1;
+          _log('[Gesture] FIST $_fistHits/$requiredGestureHits');
           if (_fistHits >= requiredGestureHits) _beginEnding();
         } else {
           _fistHits = 0;
@@ -130,6 +133,7 @@ class EatingSessionController {
       return false;
     }
 
+    _log('[MealCapture] $expectedScene received session=$sessionId');
     _cancelAcknowledgementTimer();
     _operationToken += 1;
     _pendingScene = null;
@@ -169,6 +173,8 @@ class EatingSessionController {
     _pendingScene = 'meal_before';
     _errorMessage = null;
     _state = EatingSessionState.starting;
+    _log('[EatingSession] IDLE -> STARTING session=$_mealSessionId');
+    _log('[MealCapture] meal_before settle delay started session=$_mealSessionId');
     _emit();
     _scheduleCapture(
       expectedState: EatingSessionState.starting,
@@ -182,6 +188,8 @@ class EatingSessionController {
     _pendingScene = 'meal_after';
     _errorMessage = null;
     _state = EatingSessionState.ending;
+    _log('[EatingSession] EATING -> ENDING session=$_mealSessionId');
+    _log('[MealCapture] meal_after settle delay started session=$_mealSessionId');
     _emit();
     _scheduleCapture(
       expectedState: EatingSessionState.ending,
@@ -237,6 +245,7 @@ class EatingSessionController {
       return;
     }
     _acknowledgementTimer?.cancel();
+    _log('[MealCapture] sent $trigger scene=$scene session=$sessionId');
     _acknowledgementTimer = Timer(acknowledgementTimeout, () {
       if (token == _operationToken && _pendingScene == scene) {
         _failPendingCapture('$trigger acknowledgement timeout');
@@ -252,8 +261,11 @@ class EatingSessionController {
     _cancelAcknowledgementTimer();
     _operationToken += 1;
     _pendingScene = null;
-    _errorMessage = message;
     _state = wasEnding ? EatingSessionState.eating : EatingSessionState.idle;
+    _errorMessage = wasEnding
+        ? '餐后抓拍失败，请再次握拳结束'
+        : '餐前抓拍失败，请重新张手开始';
+    _log('[MealCapture] failed reason=$message session=$_mealSessionId');
     _openPalmHits = 0;
     _fistHits = 0;
     if (_state == EatingSessionState.idle) _mealSessionId = null;
@@ -266,6 +278,11 @@ class EatingSessionController {
   }
 
   void _emit() => _onChanged?.call(snapshot);
+
+  void _log(String message) => developer.log(
+    message,
+    name: 'EatingSession',
+  );
 
   static String _defaultSessionId() {
     final now = DateTime.now().microsecondsSinceEpoch;
