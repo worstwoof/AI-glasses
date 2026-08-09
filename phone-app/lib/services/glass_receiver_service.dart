@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../packaging_models.dart';
+import 'eating_session_controller.dart';
 import 'packaging_capture_trigger_policy.dart';
 import 'phone_scene_classifier.dart';
 
@@ -46,6 +47,9 @@ class GlassReceiverSnapshot {
     required this.sceneClassification,
     required this.sceneFrameCount,
     required this.lastCapture,
+    required this.mealBeforeCapture,
+    required this.mealAfterCapture,
+    required this.eatingSession,
     required this.error,
   });
 
@@ -65,6 +69,9 @@ class GlassReceiverSnapshot {
   final PhoneSceneClassification sceneClassification;
   final int sceneFrameCount;
   final GlassCapture? lastCapture;
+  final GlassCapture? mealBeforeCapture;
+  final GlassCapture? mealAfterCapture;
+  final EatingSessionSnapshot eatingSession;
   final String? error;
 
   String get primaryIp {
@@ -94,7 +101,12 @@ class _WebRtcAnswer {
 }
 
 class GlassReceiverService extends ChangeNotifier {
-  GlassReceiverService._();
+  GlassReceiverService._() {
+    _eatingSessionController = EatingSessionController(
+      sendCapture: _sendMealCapture,
+      onChanged: _handleEatingSessionChanged,
+    );
+  }
 
   static final GlassReceiverService instance = GlassReceiverService._();
   static const int defaultPort = 8080;
@@ -147,7 +159,10 @@ class GlassReceiverService extends ChangeNotifier {
   int _sceneCandidateHits = 0;
   int _sceneFrameCount = 0;
   final _automaticPackagingCapture = PackagingCaptureTriggerState();
+  late final EatingSessionController _eatingSessionController;
   GlassCapture? _lastCapture;
+  GlassCapture? _mealBeforeCapture;
+  GlassCapture? _mealAfterCapture;
   String? _error;
 
   Stream<GlassCapture> get captures => _captureController.stream;
@@ -178,6 +193,9 @@ class GlassReceiverService extends ChangeNotifier {
     sceneClassification: _sceneClassification,
     sceneFrameCount: _sceneFrameCount,
     lastCapture: _lastCapture,
+    mealBeforeCapture: _mealBeforeCapture,
+    mealAfterCapture: _mealAfterCapture,
+    eatingSession: _eatingSessionController.snapshot,
     error: _error,
   );
 
@@ -279,6 +297,8 @@ class GlassReceiverService extends ChangeNotifier {
   Future<bool> sendCaptureCommand({
     CaptureType captureType = CaptureType.food,
     String trigger = 'app_button',
+    String? scene,
+    String? mealSessionId,
   }) async {
     final channel = _controlChannel;
     if (channel == null ||
@@ -288,12 +308,17 @@ class GlassReceiverService extends ChangeNotifier {
       return false;
     }
 
-    final payload = jsonEncode({
+    final payloadMap = <String, dynamic>{
       'type': 'capture',
       'captureType': captureType.wireValue,
       'trigger': trigger,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
-    });
+    };
+    if (scene != null && scene.isNotEmpty) payloadMap['scene'] = scene;
+    if (mealSessionId != null && mealSessionId.isNotEmpty) {
+      payloadMap['mealSessionId'] = mealSessionId;
+    }
+    final payload = jsonEncode(payloadMap);
     try {
       await channel.send(RTCDataChannelMessage(payload));
       _serverMessage = '已向眼镜发送抓拍指令';
@@ -305,6 +330,33 @@ class GlassReceiverService extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  Future<bool> _sendMealCapture(MealCaptureCommand command) {
+    return sendCaptureCommand(
+      captureType: CaptureType.fromWireValue(command.captureType),
+      trigger: command.trigger,
+      scene: command.scene,
+      mealSessionId: command.mealSessionId,
+    );
+  }
+
+  void _handleEatingSessionChanged(EatingSessionSnapshot snapshot) {
+    if (snapshot.state == EatingSessionState.starting) {
+      _mealBeforeCapture = null;
+      _mealAfterCapture = null;
+    }
+    _error = snapshot.errorMessage;
+    _serverMessage = switch (snapshot.state) {
+      EatingSessionState.idle =>
+        snapshot.errorMessage == null
+            ? '等待张开手掌开始进食'
+            : '进食 Session 未开始：' + snapshot.errorMessage!,
+      EatingSessionState.starting => '进食即将开始，等待餐前高清抓拍',
+      EatingSessionState.eating => '进食 Session 进行中，等待握拳结束',
+      EatingSessionState.ending => '进食即将结束，等待餐后高清抓拍',
+    };
+    notifyListeners();
   }
 
   Future<String> _loadOrCreateToken() async {
@@ -590,8 +642,22 @@ class GlassReceiverService extends ChangeNotifier {
       metadata: metadata,
       receivedAt: DateTime.now(),
     );
+    final acknowledged = _eatingSessionController.onCaptureReceived(
+      MealCaptureAcknowledgement(
+        captureType: metadata['type']?.toString() ?? 'food',
+        scene: metadata['scene']?.toString() ?? 'unknown',
+        mealSessionId: metadata['mealSessionId']?.toString() ?? '',
+      ),
+    );
+    if (acknowledged) {
+      if (metadata['scene']?.toString() == 'meal_before') {
+        _mealBeforeCapture = capture;
+      } else if (metadata['scene']?.toString() == 'meal_after') {
+        _mealAfterCapture = capture;
+      }
+    }
     _lastCapture = capture;
-    _serverMessage = '已收到眼镜抓拍图片';
+    _serverMessage = acknowledged ? '已收到进食 Session 抓拍图片' : '已收到眼镜抓拍图片';
     _error = null;
     _captureController.add(capture);
     notifyListeners();
@@ -714,33 +780,30 @@ class GlassReceiverService extends ChangeNotifier {
   }
 
   void _applySceneClassification(PhoneSceneClassification raw) {
-    final isActionable =
-        raw.mode == PhoneSceneMode.ingredientLabel ||
-        raw.mode == PhoneSceneMode.eating;
-    if (!isActionable) {
-      _sceneCandidateMode = PhoneSceneMode.unknown;
+    _eatingSessionController.onGesture(raw.gesture);
+    if (raw.gesture != 'ok') {
+      _sceneCandidateMode = PhoneSceneMode.waiting;
       _sceneCandidateHits = 0;
       _sceneClassification = raw;
       return;
     }
 
-    if (_sceneCandidateMode == raw.mode) {
+    if (_sceneCandidateMode == PhoneSceneMode.ingredientLabel) {
       _sceneCandidateHits += 1;
     } else {
-      _sceneCandidateMode = raw.mode;
+      _sceneCandidateMode = PhoneSceneMode.ingredientLabel;
       _sceneCandidateHits = 1;
     }
-    if (_sceneCandidateHits >= 2) {
-      final previousMode = _sceneClassification.mode;
-      _sceneClassification = raw;
-      _serverMessage = raw.message;
-      _sceneCandidateHits = 0;
-      _sceneCandidateMode = PhoneSceneMode.waiting;
-      if (raw.mode == PhoneSceneMode.ingredientLabel &&
-          previousMode != PhoneSceneMode.ingredientLabel &&
-          _automaticPackagingCapture.tryStart(DateTime.now())) {
-        unawaited(_sendAutomaticPackagingCapture());
-      }
+    if (_sceneCandidateHits < 2) return;
+
+    final previousMode = _sceneClassification.mode;
+    _sceneClassification = raw;
+    _sceneCandidateHits = 0;
+    _sceneCandidateMode = PhoneSceneMode.waiting;
+    if (_eatingSessionController.state == EatingSessionState.idle &&
+        previousMode != PhoneSceneMode.ingredientLabel &&
+        _automaticPackagingCapture.tryStart(DateTime.now())) {
+      unawaited(_sendAutomaticPackagingCapture());
     }
   }
 
@@ -839,6 +902,7 @@ class GlassReceiverService extends ChangeNotifier {
       channel.onDataChannelState = (state) {
         _log('dataChannelState=$state');
         _controlReady = state == RTCDataChannelState.RTCDataChannelOpen;
+        if (!_controlReady) _eatingSessionController.onConnectionLost();
         notifyListeners();
       };
       channel.onMessage = (message) {
@@ -1139,6 +1203,7 @@ class GlassReceiverService extends ChangeNotifier {
   }
 
   Future<void> _closePeerConnection() async {
+    _eatingSessionController.onConnectionLost();
     _statsTimer?.cancel();
     _statsTimer = null;
     final completer = _iceGatheringCompleter;

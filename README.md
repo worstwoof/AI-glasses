@@ -79,3 +79,14 @@ adb -s <rv101-serial> install -r glasses-app\app\build\outputs\apk\debug\app-deb
 ## Packaging Rule Limits
 
 `NutritionFactsParser` parses an explicit nutrition-table candidate when OCR contains `营养成分表` or `营养标签`; it falls back to full text only when no title exists. Risk thresholds have separate per-100g food and per-100mL drink fields, but their prototype defaults are not medical or regulatory standards and require product/domain validation. The packaging path uses vivo OCR plus deterministic parsing/rules; it does not call a text-generation model.
+## Eating Session
+
+The realtime architecture has three independent paths:
+
+    Camera2 preview -> WebRTC live video             (continuous)
+    Camera2 preview -> ~1 FPS 640x480 JPEG frames    (gesture sampling)
+    DataChannel capture -> Camera2 JPEG upload       (business stills only)
+
+OPEN_PALM must be confirmed on two consecutive scene frames while IDLE. The phone then enters STARTING, waits two seconds, and sends one food capture command with trigger=meal_start, scene=meal_before, and a new mealSessionId. Only the matching uploaded GlassCapture ACK enters EATING; unknown/no-hand/open-palm/OK frames cannot end or restart it. Two consecutive FIST frames enter ENDING, wait two seconds, and send the matching meal_after command. A matching uploaded ACK completes the session. No automatic MealRecord, calorie delta, or periodic high-resolution capture is created.
+
+See docs/eating_session_hardware_test_plan.md for device validation.

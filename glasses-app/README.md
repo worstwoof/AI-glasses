@@ -56,3 +56,7 @@ The phone returns an answer SDP. No TURN/STUN server is configured for this prot
 - The two runtime model assets in the glasses project are intentionally tracked because the demo needs them to run.
 - The current fruit detector is a small validation model, not a production food-recognition model.
 - On Windows workspaces with non-ASCII paths, AGP requires `android.overridePathCheck=true`.
+
+## Eating Session
+
+The glasses keeps the Camera2 preview, WebRTC publisher, and PreviewFrameReporter running while the phone controls two event-driven food stills. It forwards scene and mealSessionId from meal_start/meal_end DataChannel commands into uploaded metadata. Still capture uses the existing Camera2 controller and JPEG quality 95; a received upload is the only phone-side session ACK. The phone remains responsible for gesture classification and the latched session state.

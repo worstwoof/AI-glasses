@@ -22,6 +22,7 @@ data class CaptureUploadMetadata(
     val captureType: CaptureType = CaptureType.FOOD,
     val timestamp: Long = System.currentTimeMillis(),
     val captureSource: String = "unknown",
+    val mealSessionId: String? = null,
 )
 
 object PhotoUploader {
@@ -57,7 +58,7 @@ object PhotoUploader {
             if (dimensions.outWidth <= 0 || dimensions.outHeight <= 0) {
                 return UploadResult(false, "Saved file is not a readable JPEG")
             }
-            val metadata = JSONObject()
+            val metadataJson = JSONObject()
                 .put("deviceId", "RV101")
                 .put("timestamp", capture.timestamp)
                 .put("trigger", capture.trigger)
@@ -67,7 +68,8 @@ object PhotoUploader {
                 .put("sceneConfidence", capture.sceneConfidence)
                 .put("width", dimensions.outWidth)
                 .put("height", dimensions.outHeight)
-                .toString()
+            capture.mealSessionId?.let { metadataJson.put("mealSessionId", it) }
+            val metadata = metadataJson.toString()
             val boundary = "RV101-${UUID.randomUUID()}"
             connection = (URL(settings.endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"

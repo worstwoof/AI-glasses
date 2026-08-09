@@ -332,6 +332,8 @@ class WebRtcPreviewPublisher(
                 val request = GlassesCaptureRequest(
                     captureType = CaptureType.fromWireValue(command.optString("captureType")),
                     trigger = command.optString("trigger").trim().ifBlank { "app_button" },
+                    scene = command.optString("scene").trim().ifBlank { null },
+                    mealSessionId = command.optString("mealSessionId").trim().ifBlank { null },
                     timestamp = command.optLong("timestamp", System.currentTimeMillis()),
                 )
                 listener.onPreviewCaptureRequested(request)

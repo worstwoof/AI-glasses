@@ -94,3 +94,7 @@ flutter run ^
 如果不额外传 `AI_VISION_MODEL`，拍照识别默认会使用 `Doubao-Seed-2.0-mini`。
 
 如果没有配置 `AI_API_KEY`，应用会自动退回到本地演示识别模式。
+
+## Eating Session Hardware Validation
+
+Use adb devices and select explicit serials for the Android phone and RV101. Run the Flutter app on the phone, open Recognition -> Live Preview, and inspect Flutter plus com.aiglasses.nutrition logs. Open glasses-app in Android Studio, select the RV101 device, run/debug, and inspect the rv101_capture Logcat tag. The live WebRTC preview and approximately 1 FPS scene frames must continue during both still captures. The complete matrix is in ../docs/eating_session_hardware_test_plan.md.

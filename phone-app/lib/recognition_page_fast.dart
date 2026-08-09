@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'models.dart';
 import 'packaging_analysis_page.dart';
 import 'packaging_models.dart';
+import 'services/eating_session_debug_card.dart';
 import 'services/glass_capture_extensions.dart';
 import 'services/glass_receiver_service.dart';
 import 'services/packaging_analysis_route_gate.dart';
@@ -710,6 +711,8 @@ class _LivePreviewPane extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               _SceneModeBanner(snapshot: snapshot),
+              const SizedBox(height: 12),
+              EatingSessionDebugCard(snapshot: snapshot),
               const SizedBox(height: 16),
               ClipRRect(
                 borderRadius: BorderRadius.circular(24),

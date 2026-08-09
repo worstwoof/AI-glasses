@@ -309,10 +309,16 @@ class CaptureService : Service(),
             requestPhoto(
                 metadata = CaptureUploadMetadata(
                     trigger = request.trigger,
-                    scene = if (request.captureType == CaptureType.PACKAGING) "ingredient_label" else "remote_preview",
+                    scene = request.scene
+                        ?: if (request.captureType == CaptureType.PACKAGING) {
+                            "ingredient_label"
+                        } else {
+                            "remote_preview"
+                        },
                     sceneConfidence = 0f,
                     captureType = request.captureType,
                     timestamp = request.timestamp,
+                    mealSessionId = request.mealSessionId,
                 ),
                 cooldownMs = GESTURE_COOLDOWN_MS,
                 nextStatus = status,

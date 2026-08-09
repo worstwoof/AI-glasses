@@ -17,5 +17,7 @@ enum class CaptureType(val wireValue: String) {
 data class GlassesCaptureRequest(
     val captureType: CaptureType = CaptureType.FOOD,
     val trigger: String = "app_button",
+    val scene: String? = null,
+    val mealSessionId: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
 )
