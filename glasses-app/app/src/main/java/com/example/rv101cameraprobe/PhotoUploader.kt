@@ -19,6 +19,9 @@ data class CaptureUploadMetadata(
     val trigger: String,
     val scene: String,
     val sceneConfidence: Float,
+    val captureType: CaptureType = CaptureType.FOOD,
+    val timestamp: Long = System.currentTimeMillis(),
+    val captureSource: String = "unknown",
 )
 
 object PhotoUploader {
@@ -56,8 +59,10 @@ object PhotoUploader {
             }
             val metadata = JSONObject()
                 .put("deviceId", "RV101")
-                .put("timestamp", System.currentTimeMillis())
+                .put("timestamp", capture.timestamp)
                 .put("trigger", capture.trigger)
+                .put("type", capture.captureType.wireValue)
+                .put("captureSource", capture.captureSource)
                 .put("scene", capture.scene)
                 .put("sceneConfidence", capture.sceneConfidence)
                 .put("width", dimensions.outWidth)

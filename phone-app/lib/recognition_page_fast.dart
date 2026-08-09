@@ -7,7 +7,11 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'models.dart';
+import 'packaging_analysis_page.dart';
+import 'packaging_models.dart';
+import 'services/glass_capture_extensions.dart';
 import 'services/glass_receiver_service.dart';
+import 'services/packaging_analysis_route_gate.dart';
 import 'services/phone_scene_classifier.dart';
 import 'services/vivo_food_vision_service_v3.dart';
 import 'ui_kit.dart';
@@ -34,6 +38,8 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
     with WidgetsBindingObserver {
   final ImagePicker _picker = ImagePicker();
   final GlassReceiverService _receiver = GlassReceiverService.instance;
+  final PackagingAnalysisRouteGate _packagingAnalysisGate =
+      PackagingAnalysisRouteGate();
 
   late final RTCVideoRenderer _remoteRenderer;
   late final Future<void> _rendererReady;
@@ -127,9 +133,27 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
       _error = null;
       _stage = ScanStage.capturing;
     });
+    if (capture.captureType == CaptureType.packaging) {
+      unawaited(_openPackagingAnalysis(capture));
+      return;
+    }
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('已收到眼镜抓拍图片，可以进入单张识图分析')));
+  }
+
+  Future<void> _openPackagingAnalysis(GlassCapture capture) async {
+    if (!_packagingAnalysisGate.tryOpen()) return;
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) =>
+              PackagingAnalysisPage(capture: capture, profile: widget.profile),
+        ),
+      );
+    } finally {
+      _packagingAnalysisGate.close();
+    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -218,11 +242,24 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   }
 
   Future<void> _requestGlassCapture() async {
-    final sent = await _receiver.sendCaptureCommand();
+    final sent = await _receiver.sendCaptureCommand(
+      captureType: CaptureType.food,
+    );
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(sent ? '已请求眼镜抓拍' : '实时控制通道还没连上')));
+  }
+
+  Future<void> _requestPackagingCapture() async {
+    final sent = await _receiver.sendCaptureCommand(
+      captureType: CaptureType.packaging,
+      trigger: 'packaging_button',
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(sent ? '已请求包装高清抓拍' : '实时控制通道还没连上')));
   }
 
   Future<void> _connectGlass() async {
@@ -336,6 +373,7 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
                       onConnectGlass: () => unawaited(_connectGlass()),
                       onResetToken: () => unawaited(_receiver.resetToken()),
                       onRequestCapture: _requestGlassCapture,
+                      onRequestPackagingCapture: _requestPackagingCapture,
                       onAnalyzeLatest: _analyzeImage,
                       onOpenSingleMode: () {
                         setState(() {
@@ -593,6 +631,7 @@ class _LivePreviewPane extends StatelessWidget {
     required this.onConnectGlass,
     required this.onResetToken,
     required this.onRequestCapture,
+    required this.onRequestPackagingCapture,
     required this.onAnalyzeLatest,
     required this.onOpenSingleMode,
   });
@@ -607,6 +646,7 @@ class _LivePreviewPane extends StatelessWidget {
   final VoidCallback onConnectGlass;
   final VoidCallback onResetToken;
   final VoidCallback onRequestCapture;
+  final VoidCallback onRequestPackagingCapture;
   final VoidCallback onAnalyzeLatest;
   final VoidCallback onOpenSingleMode;
 
@@ -709,10 +749,24 @@ class _LivePreviewPane extends StatelessWidget {
                           ? onRequestCapture
                           : null,
                       icon: const Icon(Icons.camera_rounded),
-                      label: const Text('眼镜抓拍'),
+                      label: const Text('食物抓拍'),
                     ),
                   ),
                   const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      onPressed: snapshot.controlReady
+                          ? onRequestPackagingCapture
+                          : null,
+                      icon: const Icon(Icons.document_scanner_rounded),
+                      label: const Text('包装抓拍'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
                   Expanded(
                     child: FilledButton.tonalIcon(
                       onPressed: hasSelectedImage ? onAnalyzeLatest : null,

@@ -8,6 +8,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../packaging_models.dart';
 import 'phone_scene_classifier.dart';
 
 class GlassCapture {
@@ -144,6 +145,7 @@ class GlassReceiverService extends ChangeNotifier {
   PhoneSceneMode _sceneCandidateMode = PhoneSceneMode.waiting;
   int _sceneCandidateHits = 0;
   int _sceneFrameCount = 0;
+  DateTime? _lastAutomaticPackagingCaptureAt;
   GlassCapture? _lastCapture;
   String? _error;
 
@@ -266,7 +268,10 @@ class GlassReceiverService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<bool> sendCaptureCommand() async {
+  Future<bool> sendCaptureCommand({
+    CaptureType captureType = CaptureType.food,
+    String trigger = 'app_button',
+  }) async {
     final channel = _controlChannel;
     if (channel == null ||
         channel.state != RTCDataChannelState.RTCDataChannelOpen) {
@@ -277,7 +282,8 @@ class GlassReceiverService extends ChangeNotifier {
 
     final payload = jsonEncode({
       'type': 'capture',
-      'trigger': 'app_button',
+      'captureType': captureType.wireValue,
+      'trigger': trigger,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
     await channel.send(RTCDataChannelMessage(payload));
@@ -700,11 +706,7 @@ class GlassReceiverService extends ChangeNotifier {
     if (!isActionable) {
       _sceneCandidateMode = PhoneSceneMode.unknown;
       _sceneCandidateHits = 0;
-      if (_sceneClassification.mode == PhoneSceneMode.waiting ||
-          _sceneClassification.mode == PhoneSceneMode.unknown ||
-          _sceneClassification.mode == PhoneSceneMode.error) {
-        _sceneClassification = raw;
-      }
+      _sceneClassification = raw;
       return;
     }
 
@@ -715,11 +717,29 @@ class GlassReceiverService extends ChangeNotifier {
       _sceneCandidateHits = 1;
     }
     if (_sceneCandidateHits >= 2) {
+      final previousMode = _sceneClassification.mode;
       _sceneClassification = raw;
       _serverMessage = raw.message;
       _sceneCandidateHits = 0;
       _sceneCandidateMode = PhoneSceneMode.waiting;
+      if (raw.mode == PhoneSceneMode.ingredientLabel &&
+          previousMode != PhoneSceneMode.ingredientLabel &&
+          _automaticPackagingCaptureAllowed()) {
+        _lastAutomaticPackagingCaptureAt = DateTime.now();
+        unawaited(
+          sendCaptureCommand(
+            captureType: CaptureType.packaging,
+            trigger: 'phone_ok_gesture',
+          ),
+        );
+      }
     }
+  }
+
+  bool _automaticPackagingCaptureAllowed() {
+    final lastCapture = _lastAutomaticPackagingCaptureAt;
+    return lastCapture == null ||
+        DateTime.now().difference(lastCapture) >= const Duration(seconds: 8);
   }
 
   Future<_WebRtcAnswer> _acceptOffer(

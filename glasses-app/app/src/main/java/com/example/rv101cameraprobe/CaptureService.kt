@@ -38,10 +38,8 @@ class CaptureService : Service(),
     private var wakeLock: PowerManager.WakeLock? = null
     private var running = false
     private var cooldownUntilMs = 0L
-    private var capturePending = false
+    private val captureRequestTracker = CaptureRequestTracker()
     private var uploadMessage = "Photo saved"
-    private var pendingUploadMetadata = CaptureUploadMetadata("manual", "unknown", 0f)
-    private var pendingCooldownMs = GESTURE_COOLDOWN_MS
     private var startupRunnable: Runnable? = null
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -255,11 +253,12 @@ class CaptureService : Service(),
     }
 
     override fun onPhotoSaved(path: String) {
-        val uploadMetadata = pendingUploadMetadata
-        val cooldownMs = pendingCooldownMs
-        capturePending = false
-        pendingUploadMetadata = DEFAULT_CAPTURE_METADATA
-        pendingCooldownMs = GESTURE_COOLDOWN_MS
+        val pendingCapture = captureRequestTracker.take()
+            ?: PendingCapture(DEFAULT_CAPTURE_METADATA, GESTURE_COOLDOWN_MS)
+        val uploadMetadata = pendingCapture.metadata.copy(
+            captureSource = if (path.endsWith("_full.jpg")) "high_res_jpeg" else "preview_fallback",
+        )
+        val cooldownMs = pendingCapture.cooldownMs
         uploadMessage = "Photo saved; uploading to phone"
         voiceAnnouncer?.speak("图片已保存，正在上传到手机")
         beginCooldown(path, cooldownMs)
@@ -304,14 +303,20 @@ class CaptureService : Service(),
         }
     }
 
-    override fun onPreviewCaptureRequested() {
+    override fun onPreviewCaptureRequested(request: GlassesCaptureRequest) {
         mainHandler.post {
             if (!running) return@post
             requestPhoto(
-                metadata = CaptureUploadMetadata("app_button", "remote_preview", 0f),
+                metadata = CaptureUploadMetadata(
+                    trigger = request.trigger,
+                    scene = if (request.captureType == CaptureType.PACKAGING) "ingredient_label" else "remote_preview",
+                    sceneConfidence = 0f,
+                    captureType = request.captureType,
+                    timestamp = request.timestamp,
+                ),
                 cooldownMs = GESTURE_COOLDOWN_MS,
                 nextStatus = status,
-                message = "Phone requested JPEG capture",
+                message = "Phone requested ${request.captureType.wireValue} JPEG capture",
             )
         }
     }
@@ -377,23 +382,23 @@ class CaptureService : Service(),
         nextStatus: CaptureStatus,
         message: String,
     ) {
+        if (!captureRequestTracker.begin(metadata, cooldownMs)) {
+            publish(nextStatus.copy(state = CaptureState.CAPTURING, message = "A JPEG capture is already in progress"))
+            return
+        }
         if (controller?.captureStill() == true) {
-            capturePending = true
-            pendingUploadMetadata = metadata
-            pendingCooldownMs = cooldownMs
             if (metadata.trigger == "app_button") {
                 voiceAnnouncer?.speak("手机端请求拍照")
             }
             publish(nextStatus.copy(state = CaptureState.CAPTURING, message = message))
         } else {
+            captureRequestTracker.clear()
             publish(nextStatus.copy(state = CaptureState.ERROR, message = "Camera is not ready for JPEG capture"))
         }
     }
 
     private fun clearPendingCapture() {
-        capturePending = false
-        pendingUploadMetadata = DEFAULT_CAPTURE_METADATA
-        pendingCooldownMs = GESTURE_COOLDOWN_MS
+        captureRequestTracker.clear()
     }
 
     private fun beginCooldown(photoPath: String, cooldownMs: Long) {

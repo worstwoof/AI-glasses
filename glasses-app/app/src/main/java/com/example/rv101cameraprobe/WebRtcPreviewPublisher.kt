@@ -55,7 +55,7 @@ class WebRtcPreviewPublisher(
 ) {
     interface Listener {
         fun onPreviewStatus(status: PreviewConnectionStatus)
-        fun onPreviewCaptureRequested()
+        fun onPreviewCaptureRequested(request: GlassesCaptureRequest)
     }
 
     private val appContext = context.applicationContext
@@ -327,10 +327,15 @@ class WebRtcPreviewPublisher(
             val bytes = ByteArray(buffer.data.remaining())
             buffer.data.get(bytes)
             val text = String(bytes, StandardCharsets.UTF_8)
-            val type = runCatching { JSONObject(text).optString("type") }.getOrDefault("")
-            if (type == "capture") {
-                listener.onPreviewCaptureRequested()
-                report(latestStatus.copy(message = "Phone requested high-resolution capture"))
+            val command = runCatching { JSONObject(text) }.getOrNull() ?: return
+            if (command.optString("type") == "capture") {
+                val request = GlassesCaptureRequest(
+                    captureType = CaptureType.fromWireValue(command.optString("captureType")),
+                    trigger = command.optString("trigger").trim().ifBlank { "app_button" },
+                    timestamp = command.optLong("timestamp", System.currentTimeMillis()),
+                )
+                listener.onPreviewCaptureRequested(request)
+                report(latestStatus.copy(message = "Phone requested ${request.captureType.wireValue} high-resolution capture"))
             }
         }
     }

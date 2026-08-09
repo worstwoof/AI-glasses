@@ -44,7 +44,7 @@ class IngredientLabelServiceV2 {
     defaultValue: '2026209917',
   );
   static const String apiKey = String.fromEnvironment('AI_API_KEY');
-  static const String embeddedApiKey = 'sk-xuanji-2026209917-VVB5SXd0TGxlYUZiZ2Rocw==';
+
   static const String textModel = String.fromEnvironment(
     'AI_TEXT_MODEL',
     defaultValue: 'Doubao-Seed-2.0-mini',
@@ -58,8 +58,7 @@ class IngredientLabelServiceV2 {
     defaultValue: 'http://api-ai.vivo.com.cn/ocr/general_recognition',
   );
 
-  static String get effectiveApiKey =>
-      apiKey.trim().isNotEmpty ? apiKey.trim() : embeddedApiKey;
+  static String get effectiveApiKey => apiKey.trim();
 
   static bool get aiConfigured => effectiveApiKey.isNotEmpty;
   static String get businessId => 'aigc$appId';
@@ -72,7 +71,7 @@ class IngredientLabelServiceV2 {
       throw const IngredientLabelException('未检测到 AI_API_KEY，暂时无法使用配料表 OCR。');
     }
 
-    final rawText = await _recognizeText(image);
+    final rawText = await recognizeText(image);
     final normalizedText = _normalizeText(rawText);
     if (normalizedText.isEmpty) {
       throw const IngredientLabelException('没有识别到清晰文字，请尽量正对配料表重新拍摄。');
@@ -85,7 +84,7 @@ class IngredientLabelServiceV2 {
     }
   }
 
-  static Future<String> _recognizeText(XFile image) async {
+  static Future<String> recognizeText(XFile image) async {
     final bytes = await image.readAsBytes();
     final requestId = _requestId();
     final uri = Uri.parse(ocrApiUrl).replace(

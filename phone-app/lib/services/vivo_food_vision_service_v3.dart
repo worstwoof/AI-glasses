@@ -13,7 +13,6 @@ class VivoFoodVisionServiceV3 {
 
   static const String apiKey = String.fromEnvironment(
     'AI_API_KEY',
-    defaultValue: 'sk-xuanji-2026209917-VVB5SXd0TGxlYUZiZ2Rocw==',
   );
   static const String apiUrl = String.fromEnvironment(
     'AI_API_URL',
