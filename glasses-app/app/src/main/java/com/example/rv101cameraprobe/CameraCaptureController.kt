@@ -54,7 +54,6 @@ class CameraCaptureController(
     private var photoCaptureInFlight = false
     private var fallbackPending = false
     private var highResolutionEnabled = true
-    private var highResolutionIndex = 0
     private var previewFallbackAfterRestore: String? = null
     private var retryIndex = 0
     private var frames = 0L
@@ -158,7 +157,7 @@ class CameraCaptureController(
                 return
             }
             val photo = if (highResolutionEnabled) {
-                selectOutputSize(id, ImageFormat.JPEG, HIGH_RESOLUTION_PREFERENCES[highResolutionIndex]) ?: run {
+                selectOutputSize(id, ImageFormat.JPEG, HIGH_RESOLUTION_TARGET) ?: run {
                     callback.onCameraError("Camera has no JPEG output")
                     return
                 }
@@ -439,8 +438,12 @@ class CameraCaptureController(
             .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.getOutputSizes(format)
             ?: return null
-        return sizes.minByOrNull { size ->
-            kotlin.math.abs(size.width - preferred.width) + kotlin.math.abs(size.height - preferred.height)
+        val selected = CameraOutputSizeSelector.selectClosest(
+            supported = sizes.map { size -> CaptureOutputSize(size.width, size.height) },
+            target = CaptureOutputSize(preferred.width, preferred.height),
+        ) ?: return null
+        return sizes.firstOrNull { size ->
+            size.width == selected.width && size.height == selected.height
         }
     }
 
@@ -490,7 +493,7 @@ class CameraCaptureController(
 
     companion object {
         private const val TAG = "CameraCaptureController"
-        private val HIGH_RESOLUTION_PREFERENCES = listOf(Size(4032, 3024), Size(1920, 1080))
+        private val HIGH_RESOLUTION_TARGET = Size(4032, 3024)
         private const val HIGH_RES_JPEG_TIMEOUT_MS = 8_000L
         private const val PREVIEW_FALLBACK_TIMEOUT_MS = 3_000L
     }

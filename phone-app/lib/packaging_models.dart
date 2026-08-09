@@ -24,6 +24,12 @@ enum CaptureType {
   }
 }
 
+extension CaptureTypeAnalysisPolicy on CaptureType {
+  /// Missing/unknown legacy values keep the historic food-compatible route.
+  /// Packaging must use the separate OCR analysis flow.
+  bool get canUseFoodAnalysis => this != CaptureType.packaging;
+}
+
 enum NutritionBasis { per100g, per100ml, perServing, unknown }
 
 extension NutritionBasisLabel on NutritionBasis {
@@ -64,6 +70,7 @@ class NutritionValue {
 class NutritionFacts {
   const NutritionFacts({
     required this.basis,
+    this.sectionDetected = false,
     this.energy,
     this.protein,
     this.fat,
@@ -73,6 +80,7 @@ class NutritionFacts {
   });
 
   final NutritionBasis basis;
+  final bool sectionDetected;
   final NutritionValue? energy;
   final NutritionValue? protein;
   final NutritionValue? fat;
@@ -91,10 +99,15 @@ class NutritionFacts {
 }
 
 class PackagingFinding {
-  const PackagingFinding({required this.name, required this.reason});
+  const PackagingFinding({
+    required this.name,
+    required this.reason,
+    this.canonicalKey,
+  });
 
   final String name;
   final String reason;
+  final String? canonicalKey;
 }
 
 enum PackagingRiskType {
@@ -139,6 +152,10 @@ class PackagingRiskEvaluation {
   final List<String> suggestions;
 }
 
+/// Packaging currently uses cloud OCR followed by deterministic local parsing
+/// and risk rules. It does not invoke a text-generation model.
+enum PackagingAnalysisSource { vivoOcrDeterministic, deterministicText }
+
 class PackagingAnalysisResult {
   const PackagingAnalysisResult({
     required this.rawOcrText,
@@ -148,7 +165,7 @@ class PackagingAnalysisResult {
     required this.cautionIngredients,
     required this.risks,
     required this.suggestions,
-    required this.usedAi,
+    required this.analysisSource,
   });
 
   final String rawOcrText;
@@ -158,5 +175,5 @@ class PackagingAnalysisResult {
   final List<PackagingFinding> cautionIngredients;
   final List<PackagingRisk> risks;
   final List<String> suggestions;
-  final bool usedAi;
+  final PackagingAnalysisSource analysisSource;
 }

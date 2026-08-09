@@ -62,7 +62,7 @@ void main() {
     expect(result.rawOcrText, contains('营养成分表'));
   });
 
-  test('marks results from the OCR adapter as AI-backed', () async {
+  test('records OCR provenance without claiming text AI was used', () async {
     const service = PackagingAnalysisService(
       ocr: _FakeOcr('营养成分表 每100克 能量 100千焦'),
     );
@@ -72,6 +72,6 @@ void main() {
       profile: _profile,
     );
 
-    expect(result.usedAi, isTrue);
+    expect(result.analysisSource, PackagingAnalysisSource.vivoOcrDeterministic);
   });
 }

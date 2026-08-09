@@ -16,7 +16,7 @@
 Phone OK pinch / 包装抓拍 button
       -> DataChannel { type: capture, captureType: packaging, trigger, timestamp }
       -> GlassesCaptureRequest / CaptureType
-      -> Camera2 high-resolution JPEG (4032x3024, then 1920x1080)
+      -> Camera2 chooses the supported JPEG closest to the 4032x3024 high-resolution target; JPEG capture failure falls back to preview
       -> PhotoUploader multipart metadata.type=packaging
       -> GlassReceiverService saves original imageFile
       -> RecognitionPageFast routes packaging
@@ -80,7 +80,7 @@ Before multipart metadata had device, timestamp, trigger, scene, confidence, wid
 3. No ImagePicker is used in the glasses packaging path.
 4. `captureSource=preview_fallback` or dimensions at or below 640 mark a low-resolution result and show a warning.
 5. Yes. The receiver persists upload bytes; no packaging code overwrites that file.
-6. A 20 MB receiver limit exists. The vivo large-image/API limit is not verified without credentials; a resize retry is intentionally not hidden or enabled by default.
+6. Camera2 uses the supported JPEG closest to the 4032x3024 target. It does not implement a guaranteed 4032 -> 1920 runtime retry; when JPEG capture is unavailable it uses the existing preview fallback. A 20 MB receiver limit exists, while the vivo large-image/API limit remains unverified.
 
 ## 7. OCR Implementation
 
@@ -90,23 +90,23 @@ Provider remains `IngredientLabelServiceV2` with the existing vivo general OCR e
 
 ## 8. Nutrition Parser
 
-`NutritionFactsParser` supports energy, protein, fat, carbohydrate, sodium and optional sugar. It recognizes aliases `蛋白`, `总脂肪`, `碳水`, `Na`; units `kJ`, `kcal`, `千焦`, `千卡`, `g`, `mg`, `克`, `毫克`; and bases `per100g`, `per100ml`, `perServing`, `unknown`. Decimal comma is normalized only between digits. Each parsed value retains its raw substring; missing fields remain null, never zero.
+`NutritionFactsParser` first detects a conservative `营养成分表`/`营养标签` candidate section and stops at a subsequent packaging heading such as `配料` or `净含量`; only that section is parsed when available. Without a title it falls back to the full OCR text and records `sectionDetected=false`. It supports energy, protein, fat, carbohydrate, sodium and optional sugar; aliases `蛋白`, `总脂肪`, `碳水`, `Na`; units `kJ`, `kcal`, `千焦`, `千卡`, `g`, `mg`, `克`, `毫克`; and bases `per100g`, `per100ml`, `perServing`, `unknown`. Decimal comma is normalized only between digits. Each parsed value retains its raw substring; missing fields remain null, never zero.
 
 Known limits: OCR table geometry is flattened, labels/values on distant lines are not paired, and ambiguous `O/I` character correction is intentionally not guessed.
 
 ## 9. Risk Rules
 
-`PackagingRiskEngine` separately evaluates common allergens, added-sugar ingredients, sodium, fat, optional quantitative sugar and caution ingredients. Default demo screening thresholds are centralized in `PackagingRiskThresholds`: sodium 600 mg, fat 17.5 g and sugar 22.5 g per 100 g/mL. They are reviewable demo thresholds, not clinical diagnosis or a claimed Chinese regulatory classification.
+`PackagingRiskEngine` separately evaluates canonical common-allergen aliases, added-sugar ingredients, sodium, fat, optional quantitative sugar and caution ingredients. `PackagingRiskThresholds` now keeps independent food-per-100g and drink-per-100mL configuration fields; their current prototype defaults deliberately retain the former values pending product/domain validation and are not a claimed regulatory or medical standard. Per-serving and unknown bases never receive a per-100 quantitative classification.
 
 Profile rules use `allergies`, `conditions`, `preference` and `goal` deterministically. Matched allergens become high priority; hypertension/low-salt, lipid/fatty-liver/low-fat, diabetes/glucose-control and weight-management wording only produces restrained guidance. Carbonhydrate is never treated as sugar. Keyword hits are not medical diagnoses.
 
 ## 10. UI
 
-`RecognitionPageFast` has a manual `包装抓拍` request and routes uploaded `CaptureType.packaging` to `PackagingAnalysisPage`. The page displays the original image, source/dimensions, `RECEIVED`, `ANALYZING`, `NEED_CONFIRMATION`, `FAILED`, structured nutrition fields, ingredients, rule risks, profile suggestions, selectable OCR text and an OCR retry button. Low-resolution fallback shows a visible warning. `PackagingAnalysisRouteGate` rejects a second packaging navigation until the first returns.
+`RecognitionPageFast` has a manual `包装抓拍` request and routes uploaded `CaptureType.packaging` to `PackagingAnalysisPage`. Packaging clears the food-image selection and is additionally denied by the food route policy, so closing the packaging page cannot make that image available to `VivoFoodVisionServiceV3`. Automatic packaging capture is suppressed while a packaging analysis route is active; manual requests show a visible message in that state. The page displays the original image, source/dimensions, `RECEIVED`, `ANALYZING`, `NEED_CONFIRMATION`, `FAILED`, structured nutrition fields, ingredients, rule risks, profile suggestions, selectable OCR text and an OCR retry button. Low-resolution fallback shows a visible warning.
 
 ## 11. Food Regression
 
-The food request still sends `captureType=food`; non-packaging uploads retain the existing food notification and `VivoFoodVisionServiceV3.analyzeImage` action. Packaging exits early from `_handleGlassCapture`, so it never reaches the food VLM call.
+The food request still sends `captureType=food`; non-packaging uploads retain the existing food notification and `VivoFoodVisionServiceV3.analyzeImage` action. Packaging is never stored as the food selection in `_handleGlassCapture`, and `CaptureType.canUseFoodAnalysis` explicitly denies packaging before the food VLM call.
 
 ## 12. MealRecord Safety
 
@@ -145,3 +145,9 @@ OCR loses table layout and may miss values after reflections, curves, blur, fold
 3. Based on real failures, add explicit crop/rotation/perspective/multi-frame selection rather than silent compression.
 4. Add a user-confirmed packaging history model only if the product requires it.
 5. Reuse `PackagingAnalysisService`/a shared view in `IngredientLabelPageFast` as a low-risk P1 cleanup.
+## 18. Round 2 Correctness Corrections
+
+The second review fixed the residual packaging-to-food selection leak, conservative nutrition-section extraction, egg-allergen false positives from generic `蛋白`, canonical profile matching, basis-separated threshold configuration, broad single-character condition matching, failed-send cooldown consumption, active-analysis automatic capture suppression, and the ambiguous `usedAi` flag. Packaging results now report `analysisSource`: cloud vivo OCR followed by deterministic parsing/risk rules, with no text-generation model in this pipeline.
+## 19. Superseding Round 2 Verification
+
+Round 2 supersedes the earlier offline-only Android result: `flutter test` passed 34 tests, including the explicit `perServing` high-content boundary regression; `flutter analyze --no-fatal-infos --no-fatal-warnings` exited 0 with 71 existing deprecation infos, and the online `:app:testDebugUnitTest` task passed after Gradle resolved its previously uncached AndroidX runtime artifacts. The detailed issue-by-issue evidence is in `PACKAGING_OCR_FIX_ROUND2_REPORT.md`.

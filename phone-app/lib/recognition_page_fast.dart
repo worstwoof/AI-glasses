@@ -50,6 +50,7 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   GlassReceiverSnapshot _receiverState = GlassReceiverService.instance.snapshot;
   ScanStage _stage = ScanStage.idle;
   XFile? _selectedImage;
+  CaptureType _selectedCaptureType = CaptureType.food;
   AnalysisResult? _result;
   bool _running = false;
   String? _error;
@@ -101,6 +102,7 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _receiver.setPackagingAnalysisActive(false);
     _receiver.removeListener(_handleReceiverChanged);
     unawaited(_captureSubscription?.cancel());
     unawaited(_remoteStreamSubscription?.cancel());
@@ -127,23 +129,39 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
 
   void _handleGlassCapture(GlassCapture capture) {
     if (!mounted) return;
+    if (capture.captureType == CaptureType.packaging) {
+      setState(() {
+        // A packaging image must never become the food-analysis selection.
+        _selectedImage = null;
+        _selectedCaptureType = CaptureType.packaging;
+        _result = null;
+        _error = null;
+        _stage = ScanStage.idle;
+      });
+      unawaited(_openPackagingAnalysis(capture));
+      return;
+    }
+
     setState(() {
       _selectedImage = XFile(capture.imageFile.path);
+      _selectedCaptureType = capture.captureType;
       _result = null;
       _error = null;
       _stage = ScanStage.capturing;
     });
-    if (capture.captureType == CaptureType.packaging) {
-      unawaited(_openPackagingAnalysis(capture));
-      return;
-    }
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('已收到眼镜抓拍图片，可以进入单张识图分析')));
   }
 
   Future<void> _openPackagingAnalysis(GlassCapture capture) async {
-    if (!_packagingAnalysisGate.tryOpen()) return;
+    if (!_packagingAnalysisGate.tryOpen()) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('包装分析进行中，已忽略新的包装结果。')));
+      return;
+    }
+    _receiver.setPackagingAnalysisActive(true);
     try {
       await Navigator.of(context).push<void>(
         MaterialPageRoute(
@@ -152,6 +170,7 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
         ),
       );
     } finally {
+      _receiver.setPackagingAnalysisActive(false);
       _packagingAnalysisGate.close();
     }
   }
@@ -170,6 +189,7 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
       setState(() {
         _mode = _RecognitionMode.single;
         _selectedImage = image;
+        _selectedCaptureType = CaptureType.food;
         _result = null;
         _error = null;
         _stage = ScanStage.capturing;
@@ -186,6 +206,12 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('请先拍照、从相册选择，或等待眼镜上传一张抓拍图片')));
+      return;
+    }
+    if (!_selectedCaptureType.canUseFoodAnalysis) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('包装图片只能在包装食品分析页中识别。')));
       return;
     }
 
@@ -252,6 +278,12 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   }
 
   Future<void> _requestPackagingCapture() async {
+    if (_receiver.isPackagingAnalysisActive) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('包装分析进行中，请完成当前结果后再抓拍。')));
+      return;
+    }
     final sent = await _receiver.sendCaptureCommand(
       captureType: CaptureType.packaging,
       trigger: 'packaging_button',

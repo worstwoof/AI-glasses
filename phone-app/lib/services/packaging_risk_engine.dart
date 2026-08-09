@@ -1,19 +1,25 @@
 import '../models.dart';
 import '../packaging_models.dart';
 
-/// Demo screening thresholds, centralized so they are reviewable rather than
-/// scattered through UI code. They apply only to a known per-100g/per-100ml
-/// nutrition basis and are not medical diagnoses.
+/// Prototype screening thresholds only. Food and drink fields stay independent
+/// so product/domain validation can replace each basis without changing rules.
+/// They are not regulatory classifications or medical diagnostic thresholds.
 class PackagingRiskThresholds {
   const PackagingRiskThresholds({
-    this.sodiumMgPer100 = 600,
-    this.fatGPer100 = 17.5,
-    this.sugarGPer100 = 22.5,
+    this.foodSodiumMgPer100g = 600,
+    this.foodFatGPer100g = 17.5,
+    this.foodSugarGPer100g = 22.5,
+    this.drinkSodiumMgPer100ml = 600,
+    this.drinkFatGPer100ml = 17.5,
+    this.drinkSugarGPer100ml = 22.5,
   });
 
-  final double sodiumMgPer100;
-  final double fatGPer100;
-  final double sugarGPer100;
+  final double foodSodiumMgPer100g;
+  final double foodFatGPer100g;
+  final double foodSugarGPer100g;
+  final double drinkSodiumMgPer100ml;
+  final double drinkFatGPer100ml;
+  final double drinkSugarGPer100ml;
 }
 
 class PackagingRiskEngine {
@@ -23,24 +29,52 @@ class PackagingRiskEngine {
 
   final PackagingRiskThresholds thresholds;
 
-  static const _allergenRules = <String, String>{
-    '花生': '配料中出现花生相关成分，过敏人群应重点核对标签。',
-    '乳粉': '属于乳制品来源成分，乳制品敏感人群建议留意。',
-    '乳清': '属于乳制品来源成分，乳制品敏感人群建议留意。',
-    '牛奶': '配料中出现牛奶相关成分，乳制品敏感人群建议留意。',
-    '奶油': '属于乳制品来源成分，乳制品敏感人群建议留意。',
-    '鸡蛋': '配料中出现蛋类相关成分，蛋类过敏人群建议留意。',
-    '蛋白': '配料中出现蛋类相关成分，蛋类过敏人群建议留意。',
-    '大豆': '配料中出现大豆相关成分，豆类敏感人群建议留意。',
-    '黄豆': '配料中出现黄豆相关成分，豆类敏感人群建议留意。',
-    '芝麻': '配料中出现芝麻相关成分，过敏体质建议留意。',
-    '小麦': '配料中出现小麦相关成分，麸质敏感人群建议留意。',
-    '麸质': '标签提示含麸质，麸质敏感人群建议留意。',
-    '虾': '配料中出现甲壳类相关成分，海鲜过敏人群建议留意。',
-    '蟹': '配料中出现甲壳类相关成分，海鲜过敏人群建议留意。',
-    '鱼': '配料中出现鱼类相关成分，鱼类过敏人群建议留意。',
-    '坚果': '配料中出现坚果相关成分，坚果过敏人群建议留意。',
-  };
+  static const _allergenRules = <_AllergenRule>[
+    _AllergenRule(
+      'peanut',
+      ['花生仁', '花生'],
+      ['花生仁', '花生'],
+      '配料中出现花生相关成分，过敏人群应重点核对标签。',
+    ),
+    _AllergenRule(
+      'dairy',
+      ['乳清蛋白', '乳清', '酪蛋白', '乳粉', '奶粉', '牛奶', '奶油'],
+      ['乳制品', '奶制品', '乳清', '乳粉', '奶粉', '牛奶'],
+      '配料中出现乳制品来源成分，乳制品敏感人群建议留意。',
+    ),
+    _AllergenRule(
+      'egg',
+      ['鸡蛋蛋白', '鸡蛋粉', '全蛋粉', '鸡蛋', '全蛋', '蛋黄', '蛋清'],
+      ['鸡蛋', '蛋类', '蛋过敏'],
+      '配料中出现蛋类相关成分，蛋类过敏人群建议留意。',
+    ),
+    _AllergenRule(
+      'soy',
+      ['大豆分离蛋白', '大豆蛋白', '黄豆', '大豆'],
+      ['大豆', '黄豆', '豆类'],
+      '配料中出现大豆相关成分，豆类敏感人群建议留意。',
+    ),
+    _AllergenRule('sesame', ['芝麻'], ['芝麻'], '配料中出现芝麻相关成分，过敏体质建议留意。'),
+    _AllergenRule(
+      'wheat',
+      ['小麦粉', '小麦', '麸质'],
+      ['小麦', '麸质'],
+      '配料中出现小麦或麸质相关成分，敏感人群建议留意。',
+    ),
+    _AllergenRule('fish', ['鱼粉', '鱼'], ['鱼类', '鱼'], '配料中出现鱼类相关成分，鱼类过敏人群建议留意。'),
+    _AllergenRule(
+      'crustacean',
+      ['甲壳类', '虾', '蟹'],
+      ['甲壳类', '虾', '蟹', '海鲜'],
+      '配料中出现甲壳类相关成分，海鲜过敏人群建议留意。',
+    ),
+    _AllergenRule(
+      'tree_nut',
+      ['开心果', '腰果', '杏仁', '核桃', '榛子', '坚果'],
+      ['开心果', '腰果', '杏仁', '核桃', '榛子', '坚果'],
+      '配料中出现坚果相关成分，坚果过敏人群建议留意。',
+    ),
+  ];
 
   static const _cautionRules = <String, String>{
     '亚硝酸钠': '腌制类添加剂提示，建议控制高频摄入。',
@@ -61,18 +95,14 @@ class PackagingRiskEngine {
     required AppUserProfile profile,
   }) {
     final source = ingredients.join('、');
-    final allergens = _find(source, _allergenRules);
+    final allergens = _findAllergens(source);
     final cautions = _find(source, _cautionRules);
     final risks = <PackagingRisk>[];
 
-    final normalizedAllergies = profile.allergies
-        .map((value) => value.trim())
-        .where((value) => value.isNotEmpty)
-        .toList();
     for (final allergen in allergens) {
-      final matchesProfile = normalizedAllergies.any(
+      final matchesProfile = profile.allergies.any(
         (allergy) =>
-            allergen.name.contains(allergy) || allergy.contains(allergen.name),
+            _canonicalizeProfileAllergy(allergy) == allergen.canonicalKey,
       );
       risks.add(
         PackagingRisk(
@@ -91,24 +121,22 @@ class PackagingRiskEngine {
       );
     }
 
-    final hasComparableBasis =
-        nutrition.basis == NutritionBasis.per100g ||
-        nutrition.basis == NutritionBasis.per100ml;
-    if (hasComparableBasis &&
-        _massInMg(nutrition.sodium) >= thresholds.sodiumMgPer100) {
+    final sodiumThreshold = _sodiumThreshold(nutrition.basis);
+    if (sodiumThreshold != null &&
+        _massInMg(nutrition.sodium) >= sodiumThreshold) {
       risks.add(
         _nutritionRisk(
           PackagingRiskType.highSodium,
           '钠含量较高',
           '按${nutrition.basis.label}识别到 ${nutrition.sodium!.displayValue}${nutrition.sodium!.unit} 钠，建议关注同日其它高盐食物。',
           profile,
-          const ['高血压', '肾', '水肿'],
-          const ['低盐', '少盐'],
+          const ['高血压', '需要控制钠摄入', '低钠饮食'],
+          const ['低盐', '少盐', '低钠'],
         ),
       );
     }
-    if (hasComparableBasis &&
-        _massInGrams(nutrition.fat) >= thresholds.fatGPer100) {
+    final fatThreshold = _fatThreshold(nutrition.basis);
+    if (fatThreshold != null && _massInGrams(nutrition.fat) >= fatThreshold) {
       risks.add(
         _nutritionRisk(
           PackagingRiskType.highFat,
@@ -120,15 +148,16 @@ class PackagingRiskEngine {
         ),
       );
     }
-    if (hasComparableBasis &&
-        _massInGrams(nutrition.sugar) >= thresholds.sugarGPer100) {
+    final sugarThreshold = _sugarThreshold(nutrition.basis);
+    if (sugarThreshold != null &&
+        _massInGrams(nutrition.sugar) >= sugarThreshold) {
       risks.add(
         _nutritionRisk(
           PackagingRiskType.highSugar,
           '糖含量较高',
           '按${nutrition.basis.label}识别到 ${nutrition.sugar!.displayValue}${nutrition.sugar!.unit} 糖，建议控制单次和高频摄入。',
           profile,
-          const ['糖尿病', '血糖'],
+          const ['糖尿病', '血糖控制'],
           const ['控糖', '低糖'],
         ),
       );
@@ -208,6 +237,36 @@ class PackagingRiskEngine {
     }
   }
 
+  List<PackagingFinding> _findAllergens(String source) {
+    final found = <PackagingFinding>[];
+    for (final rule in _allergenRules) {
+      final matchedAlias = rule.ingredientAliases.firstWhere(
+        source.contains,
+        orElse: () => '',
+      );
+      if (matchedAlias.isEmpty) continue;
+      found.add(
+        PackagingFinding(
+          name: matchedAlias,
+          reason: rule.reason,
+          canonicalKey: rule.canonicalKey,
+        ),
+      );
+    }
+    return found;
+  }
+
+  String? _canonicalizeProfileAllergy(String allergy) {
+    final value = allergy.trim();
+    if (value.isEmpty) return null;
+    for (final rule in _allergenRules) {
+      if (rule.profileAliases.any(value.contains)) {
+        return rule.canonicalKey;
+      }
+    }
+    return null;
+  }
+
   List<PackagingFinding> _find(String source, Map<String, String> rules) {
     final found = <PackagingFinding>[];
     for (final entry in rules.entries) {
@@ -237,8 +296,26 @@ class PackagingRiskEngine {
     return suggestions.take(3).toList();
   }
 
+  double? _sodiumThreshold(NutritionBasis basis) => switch (basis) {
+    NutritionBasis.per100g => thresholds.foodSodiumMgPer100g,
+    NutritionBasis.per100ml => thresholds.drinkSodiumMgPer100ml,
+    NutritionBasis.perServing || NutritionBasis.unknown => null,
+  };
+
+  double? _fatThreshold(NutritionBasis basis) => switch (basis) {
+    NutritionBasis.per100g => thresholds.foodFatGPer100g,
+    NutritionBasis.per100ml => thresholds.drinkFatGPer100ml,
+    NutritionBasis.perServing || NutritionBasis.unknown => null,
+  };
+
+  double? _sugarThreshold(NutritionBasis basis) => switch (basis) {
+    NutritionBasis.per100g => thresholds.foodSugarGPer100g,
+    NutritionBasis.per100ml => thresholds.drinkSugarGPer100ml,
+    NutritionBasis.perServing || NutritionBasis.unknown => null,
+  };
+
   bool _containsAny(String text, List<String> values) =>
-      values.any((value) => text.contains(value));
+      values.any(text.contains);
 
   double _massInMg(NutritionValue? value) {
     if (value == null) return -1;
@@ -249,4 +326,18 @@ class PackagingRiskEngine {
     if (value == null) return -1;
     return value.unit == 'mg' ? value.value / 1000 : value.value;
   }
+}
+
+class _AllergenRule {
+  const _AllergenRule(
+    this.canonicalKey,
+    this.ingredientAliases,
+    this.profileAliases,
+    this.reason,
+  );
+
+  final String canonicalKey;
+  final List<String> ingredientAliases;
+  final List<String> profileAliases;
+  final String reason;
 }

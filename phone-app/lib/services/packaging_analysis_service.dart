@@ -37,13 +37,18 @@ class PackagingAnalysisService {
     if (rawText.trim().isEmpty) {
       throw const PackagingAnalysisException('OCR 没有识别到清晰文字，请正对包装并减少反光后重试。');
     }
-    return analyzeText(rawText: rawText, profile: profile, usedAi: true);
+    return analyzeText(
+      rawText: rawText,
+      profile: profile,
+      analysisSource: PackagingAnalysisSource.vivoOcrDeterministic,
+    );
   }
 
   PackagingAnalysisResult analyzeText({
     required String rawText,
     required AppUserProfile profile,
-    bool usedAi = false,
+    PackagingAnalysisSource analysisSource =
+        PackagingAnalysisSource.deterministicText,
   }) {
     final normalized = rawText.trim();
     if (normalized.isEmpty) {
@@ -64,7 +69,7 @@ class PackagingAnalysisService {
       cautionIngredients: evaluation.cautionIngredients,
       risks: evaluation.risks,
       suggestions: evaluation.suggestions,
-      usedAi: usedAi,
+      analysisSource: analysisSource,
     );
   }
 

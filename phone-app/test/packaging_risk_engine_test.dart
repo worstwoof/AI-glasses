@@ -114,6 +114,34 @@ void main() {
     },
   );
 
+  test(
+    'does not treat per-serving nutrition as a per-100 high-content measurement',
+    () {
+      final result = engine.evaluate(
+        nutrition: _facts(
+          basis: NutritionBasis.perServing,
+          sodium: const NutritionValue(
+            value: 680,
+            unit: 'mg',
+            rawText: '680mg',
+          ),
+          fat: const NutritionValue(value: 25.4, unit: 'g', rawText: '25.4g'),
+        ),
+        ingredients: const [],
+        profile: _blankProfile,
+      );
+
+      expect(
+        result.risks.where(
+          (risk) =>
+              risk.type == PackagingRiskType.highSodium ||
+              risk.type == PackagingRiskType.highFat,
+        ),
+        isEmpty,
+      );
+    },
+  );
+
   test('flags added-sugar ingredients without inventing a sugar quantity', () {
     final result = engine.evaluate(
       nutrition: _facts(),
@@ -176,6 +204,118 @@ void main() {
       );
 
       expect(result.risks, isEmpty);
+    },
+  );
+
+  test('generic protein is not treated as an egg allergen', () {
+    final profile = _blankProfile.copyWith(allergies: const ['鸡蛋']);
+    final result = engine.evaluate(
+      nutrition: _facts(),
+      ingredients: const ['大豆分离蛋白'],
+      profile: profile,
+    );
+
+    expect(
+      result.allergens.map((item) => item.canonicalKey),
+      isNot(contains('egg')),
+    );
+    expect(
+      result.risks.any(
+        (risk) => risk.type == PackagingRiskType.allergen && risk.personalized,
+      ),
+      isFalse,
+    );
+  });
+  test('egg protein matches egg allergy aliases', () {
+    final profile = _blankProfile.copyWith(allergies: const ['鸡蛋']);
+    final result = engine.evaluate(
+      nutrition: _facts(),
+      ingredients: const ['鸡蛋蛋白'],
+      profile: profile,
+    );
+
+    expect(result.allergens.any((item) => item.canonicalKey == 'egg'), isTrue);
+    expect(
+      result.risks.any(
+        (risk) =>
+            risk.type == PackagingRiskType.allergen &&
+            risk.level == PackagingRiskLevel.high,
+      ),
+      isTrue,
+    );
+  });
+
+  test('dairy and soy profile aliases match related ingredients', () {
+    final dairy = engine.evaluate(
+      nutrition: _facts(),
+      ingredients: const ['乳清蛋白'],
+      profile: _blankProfile.copyWith(allergies: const ['乳制品']),
+    );
+    final soy = engine.evaluate(
+      nutrition: _facts(),
+      ingredients: const ['大豆蛋白'],
+      profile: _blankProfile.copyWith(allergies: const ['大豆']),
+    );
+
+    expect(dairy.risks.any((risk) => risk.personalized), isTrue);
+    expect(soy.risks.any((risk) => risk.personalized), isTrue);
+  });
+
+  test('uses separate food and drink threshold configuration', () {
+    const thresholds = PackagingRiskThresholds(
+      foodSugarGPer100g: 20,
+      drinkSugarGPer100ml: 5,
+      foodSodiumMgPer100g: 600,
+      drinkSodiumMgPer100ml: 200,
+      foodFatGPer100g: 17.5,
+      drinkFatGPer100ml: 3,
+    );
+    const configuredEngine = PackagingRiskEngine(thresholds: thresholds);
+    const sugar = NutritionValue(value: 10, unit: 'g', rawText: '10g');
+
+    final food = configuredEngine.evaluate(
+      nutrition: _facts(sugar: sugar, basis: NutritionBasis.per100g),
+      ingredients: const [],
+      profile: _blankProfile,
+    );
+    final drink = configuredEngine.evaluate(
+      nutrition: _facts(sugar: sugar, basis: NutritionBasis.per100ml),
+      ingredients: const [],
+      profile: _blankProfile,
+    );
+
+    expect(
+      food.risks.map((risk) => risk.type),
+      isNot(contains(PackagingRiskType.highSugar)),
+    );
+    expect(
+      drink.risks.map((risk) => risk.type),
+      contains(PackagingRiskType.highSugar),
+    );
+  });
+
+  test(
+    'does not personalize sodium risk for a vague single-character condition',
+    () {
+      final result = engine.evaluate(
+        nutrition: _facts(
+          sodium: const NutritionValue(
+            value: 680,
+            unit: 'mg',
+            rawText: '680mg',
+          ),
+        ),
+        ingredients: const [],
+        profile: _blankProfile.copyWith(conditions: const ['肾功能检查中']),
+      );
+
+      expect(
+        result.risks.any(
+          (risk) =>
+              risk.type == PackagingRiskType.highSodium && risk.personalized,
+        ),
+        isFalse,
+      );
     },
   );
 }

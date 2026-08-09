@@ -5,9 +5,11 @@ class NutritionFactsParser {
   const NutritionFactsParser();
 
   NutritionFacts parse(String rawOcrText) {
-    final normalized = _normalize(rawOcrText);
+    final section = _extractNutritionSection(rawOcrText);
+    final normalized = _normalize(section.text);
     return NutritionFacts(
       basis: _parseBasis(normalized),
+      sectionDetected: section.detected,
       energy: _findValue(normalized, r'(?:能量|energy)', _energyUnits),
       protein: _findValue(normalized, r'(?:蛋白质|蛋白|protein)', _massUnits),
       fat: _findValue(normalized, r'(?:总?脂肪|fat)', _massUnits),
@@ -27,6 +29,29 @@ class NutritionFactsParser {
 
   static const _energyUnits = r'(?:kJ|kj|千焦|kcal|KCAL|千卡)';
   static const _massUnits = r'(?:mg|MG|毫克|g|G|克)';
+  static final _nutritionTitle = RegExp(
+    r'(?:营养成分表|营养标签|nutrition\s*facts?)',
+    caseSensitive: false,
+  );
+  static final _sectionEnd = RegExp(
+    r'(?:配料表|配料|成分表|原料表|食用方法|贮存方法|储存方法|产品标准|生产日期|保质期|净含量|制造商|生产商|地址)',
+    caseSensitive: false,
+  );
+
+  _NutritionSection _extractNutritionSection(String rawText) {
+    final title = _nutritionTitle.firstMatch(rawText);
+    if (title == null) {
+      return _NutritionSection(text: rawText, detected: false);
+    }
+
+    final afterTitle = rawText.substring(title.end);
+    final end = _sectionEnd.firstMatch(afterTitle);
+    final sectionEnd = end == null ? rawText.length : title.end + end.start;
+    return _NutritionSection(
+      text: rawText.substring(title.start, sectionEnd),
+      detected: true,
+    );
+  }
 
   String _normalize(String value) => value
       .replaceAll('，', ',')
@@ -86,4 +111,11 @@ class NutritionFactsParser {
         return value;
     }
   }
+}
+
+class _NutritionSection {
+  const _NutritionSection({required this.text, required this.detected});
+
+  final String text;
+  final bool detected;
 }

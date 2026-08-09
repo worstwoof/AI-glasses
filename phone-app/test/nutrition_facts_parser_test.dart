@@ -110,4 +110,76 @@ Na 500mg
     expect(facts.carbohydrate?.value, 20);
     expect(facts.sugar?.value, 8);
   });
+
+  test('ingredient protein does not override nutrition-table protein', () {
+    const text = '''
+产品名称 高蛋白能量棒
+配料：
+大豆分离蛋白 20g
+白砂糖
+
+营养成分表
+项目 每100克
+能量 1800千焦
+蛋白质 8.5克
+脂肪 10克
+碳水化合物 60克
+钠 300毫克
+''';
+
+    final facts = parser.parse(text);
+
+    expect(facts.sectionDetected, isTrue);
+    expect(facts.protein?.value, 8.5);
+  });
+
+  test('ingredient sodium salt does not override nutrition-table sodium', () {
+    const text = '''
+配料：
+小麦粉
+谷氨酸钠
+碳酸氢钠 500mg
+
+营养成分表
+每100克
+钠 320毫克
+''';
+
+    final facts = parser.parse(text);
+
+    expect(facts.sodium?.value, 320);
+  });
+
+  test('falls back to full OCR text when nutrition title is missing', () {
+    final facts = parser.parse('每100g 能量 1800kJ 蛋白质 8.5g 钠 320mg');
+
+    expect(facts.sectionDetected, isFalse);
+    expect(facts.protein?.value, 8.5);
+    expect(facts.sodium?.value, 320);
+  });
+
+  test('does not parse text after the nutrition section boundary', () {
+    const text = '''
+营养成分表 每100克
+蛋白质 8.5克
+配料：大豆分离蛋白 20g
+''';
+
+    final facts = parser.parse(text);
+
+    expect(facts.protein?.value, 8.5);
+  });
+
+  test('supports OCR labels and values split across lines', () {
+    final facts = parser.parse('''
+营养成分表
+每100克
+蛋白质
+8.5
+克
+''');
+
+    expect(facts.protein?.value, 8.5);
+    expect(facts.protein?.unit, 'g');
+  });
 }

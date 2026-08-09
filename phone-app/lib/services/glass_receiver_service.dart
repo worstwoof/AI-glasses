@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../packaging_models.dart';
+import 'packaging_capture_trigger_policy.dart';
 import 'phone_scene_classifier.dart';
 
 class GlassCapture {
@@ -145,13 +146,20 @@ class GlassReceiverService extends ChangeNotifier {
   PhoneSceneMode _sceneCandidateMode = PhoneSceneMode.waiting;
   int _sceneCandidateHits = 0;
   int _sceneFrameCount = 0;
-  DateTime? _lastAutomaticPackagingCaptureAt;
+  final _automaticPackagingCapture = PackagingCaptureTriggerState();
   GlassCapture? _lastCapture;
   String? _error;
 
   Stream<GlassCapture> get captures => _captureController.stream;
 
   Stream<MediaStream?> get remoteStreams => _remoteStreamController.stream;
+
+  bool get isPackagingAnalysisActive =>
+      _automaticPackagingCapture.analysisActive;
+
+  void setPackagingAnalysisActive(bool active) {
+    _automaticPackagingCapture.analysisActive = active;
+  }
 
   GlassReceiverSnapshot get snapshot => GlassReceiverSnapshot(
     running: _running,
@@ -286,11 +294,17 @@ class GlassReceiverService extends ChangeNotifier {
       'trigger': trigger,
       'timestamp': DateTime.now().millisecondsSinceEpoch,
     });
-    await channel.send(RTCDataChannelMessage(payload));
-    _serverMessage = '已向眼镜发送抓拍指令';
-    _error = null;
-    notifyListeners();
-    return true;
+    try {
+      await channel.send(RTCDataChannelMessage(payload));
+      _serverMessage = '已向眼镜发送抓拍指令';
+      _error = null;
+      notifyListeners();
+      return true;
+    } catch (error) {
+      _error = '发送眼镜抓拍指令失败：$error';
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<String> _loadOrCreateToken() async {
@@ -724,22 +738,22 @@ class GlassReceiverService extends ChangeNotifier {
       _sceneCandidateMode = PhoneSceneMode.waiting;
       if (raw.mode == PhoneSceneMode.ingredientLabel &&
           previousMode != PhoneSceneMode.ingredientLabel &&
-          _automaticPackagingCaptureAllowed()) {
-        _lastAutomaticPackagingCaptureAt = DateTime.now();
-        unawaited(
-          sendCaptureCommand(
-            captureType: CaptureType.packaging,
-            trigger: 'phone_ok_gesture',
-          ),
-        );
+          _automaticPackagingCapture.tryStart(DateTime.now())) {
+        unawaited(_sendAutomaticPackagingCapture());
       }
     }
   }
 
-  bool _automaticPackagingCaptureAllowed() {
-    final lastCapture = _lastAutomaticPackagingCaptureAt;
-    return lastCapture == null ||
-        DateTime.now().difference(lastCapture) >= const Duration(seconds: 8);
+  Future<void> _sendAutomaticPackagingCapture() async {
+    var sent = false;
+    try {
+      sent = await sendCaptureCommand(
+        captureType: CaptureType.packaging,
+        trigger: 'phone_ok_gesture',
+      );
+    } finally {
+      _automaticPackagingCapture.complete(sent: sent, now: DateTime.now());
+    }
   }
 
   Future<_WebRtcAnswer> _acceptOffer(

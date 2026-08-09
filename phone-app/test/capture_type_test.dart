@@ -12,4 +12,10 @@ void main() {
       expect(CaptureType.fromWireValue('future_value'), CaptureType.unknown);
     },
   );
+
+  test('packaging capture is never eligible for food analysis', () {
+    expect(CaptureType.food.canUseFoodAnalysis, isTrue);
+    expect(CaptureType.unknown.canUseFoodAnalysis, isTrue);
+    expect(CaptureType.packaging.canUseFoodAnalysis, isFalse);
+  });
 }

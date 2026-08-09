@@ -29,10 +29,10 @@ OK pinch or 包装抓拍 button
 ```
 
 - `food` captures retain the original `VivoFoodVisionServiceV3` path and can be confirmed as `MealRecord` by the existing food UI.
-- `packaging` captures bypass the food VLM and never auto-create a `MealRecord`; a packaging page remains in `NEED_CONFIRMATION` after analysis.
-- The automatic packaging trigger is a rising edge of the phone-side `ingredientLabel` state, with an 8-second cooldown. Manual requests use `packaging_button`.
+- `packaging` captures clear the food-image selection, are denied by the food route policy, bypass the food VLM, and never auto-create a `MealRecord`; a packaging page remains in `NEED_CONFIRMATION` after analysis.
+- The automatic packaging trigger is a rising edge of the phone-side `ingredientLabel` state. An 8-second cooldown starts only after a successful DataChannel send and automatic capture is suppressed while packaging analysis is active; manual requests use `packaging_button`.
 - The glasses JPEG is the OCR source of truth. `PackagingAnalysisPage` passes `XFile(capture.imageFile.path)` directly to OCR without `ImagePicker`, `imageQuality`, resize, or re-encoding.
-- RV101 requests `4032x3024` first, then `1920x1080`; a `640x480` preview fallback is tagged and shown with a quality warning.
+- RV101 chooses the supported JPEG closest to the `4032x3024` target; it does not claim a guaranteed `4032x3024 -> 1920x1080` retry sequence. If JPEG capture is unavailable, the tagged `640x480` preview fallback is shown with a quality warning.
 - The separate manual `IngredientLabelPageFast` intentionally remains an ImagePicker flow and may use `imageQuality`/`maxWidth`; it is not the glasses packaging OCR path.
 
 ## Configuration
@@ -76,3 +76,6 @@ adb -s <rv101-serial> install -r glasses-app\app\build\outputs\apk\debug\app-deb
 - `PACKAGING_OCR_IMPLEMENTATION_REPORT.md`: implementation, evidence, limitations and next steps.
 - `docs/packaging_ocr_test_plan.md`: 13 packaging-image scenarios for real-device testing.
 - `glasses-app/docs/AI眼镜采集与手机App衔接说明.md`: local-network, Camera2 and WebRTC integration reference.
+## Packaging Rule Limits
+
+`NutritionFactsParser` parses an explicit nutrition-table candidate when OCR contains `营养成分表` or `营养标签`; it falls back to full text only when no title exists. Risk thresholds have separate per-100g food and per-100mL drink fields, but their prototype defaults are not medical or regulatory standards and require product/domain validation. The packaging path uses vivo OCR plus deterministic parsing/rules; it does not call a text-generation model.
