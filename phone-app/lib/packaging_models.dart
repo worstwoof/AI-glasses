@@ -56,6 +56,18 @@ class NutritionValue {
       ? value.toStringAsFixed(0)
       : value.toString();
 
+  Map<String, dynamic> toMap() => {
+    'value': value,
+    'unit': unit,
+    'rawText': rawText,
+  };
+
+  factory NutritionValue.fromMap(Map<String, dynamic> map) => NutritionValue(
+    value: _asDouble(map['value']),
+    unit: map['unit']?.toString() ?? '',
+    rawText: map['rawText']?.toString() ?? '',
+  );
+
   @override
   bool operator ==(Object other) =>
       other is NutritionValue &&
@@ -96,6 +108,31 @@ class NutritionFacts {
     sodium,
     sugar,
   ].whereType<NutritionValue>().length;
+
+  Map<String, dynamic> toMap() => {
+    'basis': basis.name,
+    'sectionDetected': sectionDetected,
+    'energy': energy?.toMap(),
+    'protein': protein?.toMap(),
+    'fat': fat?.toMap(),
+    'carbohydrate': carbohydrate?.toMap(),
+    'sodium': sodium?.toMap(),
+    'sugar': sugar?.toMap(),
+  };
+
+  factory NutritionFacts.fromMap(Map<String, dynamic> map) => NutritionFacts(
+    basis: NutritionBasis.values.firstWhere(
+      (candidate) => candidate.name == map['basis']?.toString(),
+      orElse: () => NutritionBasis.unknown,
+    ),
+    sectionDetected: map['sectionDetected'] == true,
+    energy: _nutritionValueFromMap(map['energy']),
+    protein: _nutritionValueFromMap(map['protein']),
+    fat: _nutritionValueFromMap(map['fat']),
+    carbohydrate: _nutritionValueFromMap(map['carbohydrate']),
+    sodium: _nutritionValueFromMap(map['sodium']),
+    sugar: _nutritionValueFromMap(map['sugar']),
+  );
 }
 
 class PackagingFinding {
@@ -136,6 +173,28 @@ class PackagingRisk {
   final String title;
   final String reason;
   final bool personalized;
+
+  Map<String, dynamic> toMap() => {
+    'type': type.name,
+    'level': level.name,
+    'title': title,
+    'reason': reason,
+    'personalized': personalized,
+  };
+
+  factory PackagingRisk.fromMap(Map<String, dynamic> map) => PackagingRisk(
+    type: PackagingRiskType.values.firstWhere(
+      (candidate) => candidate.name == map['type']?.toString(),
+      orElse: () => PackagingRiskType.cautionIngredient,
+    ),
+    level: PackagingRiskLevel.values.firstWhere(
+      (candidate) => candidate.name == map['level']?.toString(),
+      orElse: () => PackagingRiskLevel.info,
+    ),
+    title: map['title']?.toString() ?? '',
+    reason: map['reason']?.toString() ?? '',
+    personalized: map['personalized'] == true,
+  );
 }
 
 class PackagingRiskEvaluation {
@@ -176,4 +235,103 @@ class PackagingAnalysisResult {
   final List<PackagingRisk> risks;
   final List<String> suggestions;
   final PackagingAnalysisSource analysisSource;
+}
+
+/// A user-confirmed packaging scan. It is intentionally independent from
+/// [MealRecord], because reading a label does not mean the product was eaten.
+class PackagingScanRecord {
+  const PackagingScanRecord({
+    required this.id,
+    required this.imagePath,
+    required this.createdAt,
+    required this.rawOcrText,
+    required this.confirmedIngredients,
+    required this.confirmedNutrition,
+    required this.risks,
+    this.mealSessionId,
+  });
+
+  final String id;
+  final String imagePath;
+  final DateTime createdAt;
+  final String rawOcrText;
+  final List<String> confirmedIngredients;
+  final NutritionFacts confirmedNutrition;
+  final List<PackagingRisk> risks;
+  final String? mealSessionId;
+
+  factory PackagingScanRecord.fromAnalysis({
+    required String id,
+    required String imagePath,
+    required DateTime createdAt,
+    required PackagingAnalysisResult analysis,
+    String? mealSessionId,
+  }) => PackagingScanRecord(
+    id: id,
+    imagePath: imagePath,
+    createdAt: createdAt,
+    rawOcrText: analysis.rawOcrText,
+    confirmedIngredients: List<String>.unmodifiable(analysis.ingredients),
+    confirmedNutrition: analysis.nutrition,
+    risks: List<PackagingRisk>.unmodifiable(analysis.risks),
+    mealSessionId: mealSessionId,
+  );
+
+  Map<String, dynamic> toMap() => {
+    'id': id,
+    'imagePath': imagePath,
+    'createdAt': createdAt.toIso8601String(),
+    'rawOcrText': rawOcrText,
+    'confirmedIngredients': confirmedIngredients,
+    'confirmedNutrition': confirmedNutrition.toMap(),
+    'risks': risks.map((risk) => risk.toMap()).toList(growable: false),
+    'mealSessionId': mealSessionId,
+  };
+
+  factory PackagingScanRecord.fromMap(Map<String, dynamic> map) =>
+      PackagingScanRecord(
+        id: map['id']?.toString() ?? '',
+        imagePath: map['imagePath']?.toString() ?? '',
+        createdAt:
+            DateTime.tryParse(map['createdAt']?.toString() ?? '') ??
+            DateTime.now(),
+        rawOcrText: map['rawOcrText']?.toString() ?? '',
+        confirmedIngredients: _stringList(map['confirmedIngredients']),
+        confirmedNutrition: _factsFromMap(map['confirmedNutrition']),
+        risks: _riskList(map['risks']),
+        mealSessionId: _optionalString(map['mealSessionId']),
+      );
+}
+
+NutritionValue? _nutritionValueFromMap(Object? value) {
+  if (value is! Map) return null;
+  return NutritionValue.fromMap(Map<String, dynamic>.from(value));
+}
+
+NutritionFacts _factsFromMap(Object? value) {
+  if (value is! Map) return const NutritionFacts(basis: NutritionBasis.unknown);
+  return NutritionFacts.fromMap(Map<String, dynamic>.from(value));
+}
+
+List<PackagingRisk> _riskList(Object? value) {
+  if (value is! List) return const [];
+  return value
+      .whereType<Map>()
+      .map((item) => PackagingRisk.fromMap(Map<String, dynamic>.from(item)))
+      .toList(growable: false);
+}
+
+List<String> _stringList(Object? value) {
+  if (value is! List) return const [];
+  return value.map((item) => item.toString()).toList(growable: false);
+}
+
+String? _optionalString(Object? value) {
+  final text = value?.toString().trim();
+  return text == null || text.isEmpty ? null : text;
+}
+
+double _asDouble(Object? value) {
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '') ?? 0;
 }

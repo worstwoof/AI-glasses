@@ -73,6 +73,33 @@ class PackagingAnalysisService {
     );
   }
 
+  PackagingAnalysisResult recalculate({
+    required PackagingAnalysisResult previous,
+    required List<String> confirmedIngredients,
+    required NutritionFacts confirmedNutrition,
+    required AppUserProfile profile,
+  }) {
+    final ingredients = confirmedIngredients
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    final evaluation = riskEngine.evaluate(
+      nutrition: confirmedNutrition,
+      ingredients: ingredients,
+      profile: profile,
+    );
+    return PackagingAnalysisResult(
+      rawOcrText: previous.rawOcrText,
+      ingredients: ingredients,
+      nutrition: confirmedNutrition,
+      allergens: evaluation.allergens,
+      cautionIngredients: evaluation.cautionIngredients,
+      risks: evaluation.risks,
+      suggestions: evaluation.suggestions,
+      analysisSource: previous.analysisSource,
+    );
+  }
+
   List<String> _extractIngredients(String text) {
     final marker = RegExp(r'(配料表|配料|成分表|原料表)\s*[:：]?').firstMatch(text);
     if (marker == null) return const [];

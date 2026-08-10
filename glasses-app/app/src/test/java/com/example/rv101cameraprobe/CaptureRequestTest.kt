@@ -12,10 +12,12 @@ class CaptureRequestTest {
             trigger = "meal_start",
             scene = "meal_before",
             mealSessionId = "meal_test_1",
+            captureTaskId = "capture_test_1",
         )
 
         assertEquals("meal_before", request.scene)
         assertEquals("meal_test_1", request.mealSessionId)
+        assertEquals("capture_test_1", request.captureTaskId)
     }
 
     @Test
@@ -26,5 +28,6 @@ class CaptureRequestTest {
         assertEquals("app_button", request.trigger)
         assertNull(request.scene)
         assertNull(request.mealSessionId)
+        assertNull(request.captureTaskId)
     }
 }

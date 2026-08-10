@@ -23,6 +23,7 @@ data class CaptureUploadMetadata(
     val timestamp: Long = System.currentTimeMillis(),
     val captureSource: String = "unknown",
     val mealSessionId: String? = null,
+    val captureTaskId: String? = null,
 )
 
 object PhotoUploader {
@@ -69,6 +70,9 @@ object PhotoUploader {
                 .put("width", dimensions.outWidth)
                 .put("height", dimensions.outHeight)
             capture.mealSessionId?.let { metadataJson.put("mealSessionId", it) }
+            capture.captureTaskId?.takeIf { it.isNotBlank() }?.let {
+                metadataJson.put("captureTaskId", it)
+            }
             val metadata = metadataJson.toString()
             val boundary = "RV101-${UUID.randomUUID()}"
             connection = (URL(settings.endpoint).openConnection() as HttpURLConnection).apply {

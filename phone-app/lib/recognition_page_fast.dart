@@ -9,6 +9,9 @@ import 'package:image_picker/image_picker.dart';
 import 'models.dart';
 import 'packaging_analysis_page.dart';
 import 'packaging_models.dart';
+import 'services/capture_coordinator.dart';
+import 'services/capture_mode_controller.dart';
+import 'services/eating_session_controller.dart';
 import 'services/eating_session_debug_card.dart';
 import 'services/glass_capture_extensions.dart';
 import 'services/glass_receiver_service.dart';
@@ -269,13 +272,16 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   }
 
   Future<void> _requestGlassCapture() async {
-    final sent = await _receiver.sendCaptureCommand(
-      captureType: CaptureType.food,
-    );
-    if (!mounted) return;
+    if (!_receiver.snapshot.controlReady) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('实时控制通道还没连上')));
+      return;
+    }
+    unawaited(_receiver.requestFoodCapture().then(_showCaptureResult));
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text(sent ? '已请求眼镜抓拍' : '实时控制通道还没连上')));
+    ).showSnackBar(const SnackBar(content: Text('食物抓拍已进入统一队列')));
   }
 
   Future<void> _requestPackagingCapture() async {
@@ -285,14 +291,23 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
       ).showSnackBar(const SnackBar(content: Text('包装分析进行中，请完成当前结果后再抓拍。')));
       return;
     }
-    final sent = await _receiver.sendCaptureCommand(
-      captureType: CaptureType.packaging,
-      trigger: 'packaging_button',
-    );
-    if (!mounted) return;
+    if (!_receiver.snapshot.controlReady) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('实时控制通道还没连上')));
+      return;
+    }
+    unawaited(_receiver.requestPackagingCapture().then(_showCaptureResult));
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(SnackBar(content: Text(sent ? '已请求包装高清抓拍' : '实时控制通道还没连上')));
+    ).showSnackBar(const SnackBar(content: Text('包装抓拍已进入统一队列')));
+  }
+
+  void _showCaptureResult(CaptureTaskResult result) {
+    if (!mounted || result.accepted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('抓拍未完成：${result.message ?? result.state.name}')),
+    );
   }
 
   Future<void> _connectGlass() async {
@@ -407,6 +422,8 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
                       onResetToken: () => unawaited(_receiver.resetToken()),
                       onRequestCapture: _requestGlassCapture,
                       onRequestPackagingCapture: _requestPackagingCapture,
+                      onCaptureModeChanged: _receiver.setCaptureMode,
+                      onCancelEatingSession: _receiver.cancelEatingSession,
                       onAnalyzeLatest: _analyzeImage,
                       onOpenSingleMode: () {
                         setState(() {
@@ -665,6 +682,8 @@ class _LivePreviewPane extends StatelessWidget {
     required this.onResetToken,
     required this.onRequestCapture,
     required this.onRequestPackagingCapture,
+    required this.onCaptureModeChanged,
+    required this.onCancelEatingSession,
     required this.onAnalyzeLatest,
     required this.onOpenSingleMode,
   });
@@ -680,6 +699,8 @@ class _LivePreviewPane extends StatelessWidget {
   final VoidCallback onResetToken;
   final VoidCallback onRequestCapture;
   final VoidCallback onRequestPackagingCapture;
+  final ValueChanged<CaptureMode> onCaptureModeChanged;
+  final VoidCallback onCancelEatingSession;
   final VoidCallback onAnalyzeLatest;
   final VoidCallback onOpenSingleMode;
 
@@ -710,9 +731,17 @@ class _LivePreviewPane extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 14),
+              _CaptureModeSelector(
+                snapshot: snapshot,
+                onChanged: onCaptureModeChanged,
+              ),
+              const SizedBox(height: 12),
               _SceneModeBanner(snapshot: snapshot),
               const SizedBox(height: 12),
-              EatingSessionDebugCard(snapshot: snapshot),
+              EatingSessionDebugCard(
+                snapshot: snapshot,
+                onCancel: onCancelEatingSession,
+              ),
               const SizedBox(height: 16),
               ClipRRect(
                 borderRadius: BorderRadius.circular(24),
@@ -890,6 +919,70 @@ class _LivePreviewPane extends StatelessWidget {
         if (snapshot.lastCapture != null) ...[
           const SizedBox(height: 16),
           _LastCaptureCard(capture: snapshot.lastCapture!),
+        ],
+      ],
+    );
+  }
+}
+
+class _CaptureModeSelector extends StatelessWidget {
+  const _CaptureModeSelector({required this.snapshot, required this.onChanged});
+
+  final GlassReceiverSnapshot snapshot;
+  final ValueChanged<CaptureMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final sessionActive =
+        snapshot.eatingSession.state != EatingSessionState.idle;
+    final automaticAvailable = snapshot.automaticCaptureAvailable;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('采集模式', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SegmentedButton<CaptureMode>(
+          showSelectedIcon: false,
+          segments: [
+            const ButtonSegment<CaptureMode>(
+              value: CaptureMode.manual,
+              label: Text('手动'),
+            ),
+            ButtonSegment<CaptureMode>(
+              value: CaptureMode.automatic,
+              label: const Text('自动'),
+              enabled: automaticAvailable,
+            ),
+            ButtonSegment<CaptureMode>(
+              value: CaptureMode.hybrid,
+              label: const Text('混合'),
+              enabled: automaticAvailable,
+            ),
+          ],
+          selected: {snapshot.captureMode},
+          onSelectionChanged: sessionActive
+              ? null
+              : (selection) => onChanged(selection.single),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          automaticAvailable
+              ? '食品自动识别：已加载'
+              : snapshot.automaticCaptureUnavailableReason,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: automaticAvailable ? scheme.primary : scheme.outline,
+          ),
+        ),
+        if (sessionActive) ...[
+          const SizedBox(height: 3),
+          Text(
+            '进食 Session 进行中，模式切换已锁定。',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.outline),
+          ),
         ],
       ],
     );

@@ -16,6 +16,7 @@ class CaptureRequestTrackerTest {
             sceneConfidence = 0f,
             captureType = CaptureType.PACKAGING,
             timestamp = 123L,
+            captureTaskId = "capture_packaging_1",
         )
         val food = CaptureUploadMetadata("app_button", "remote_preview", 0f)
 
@@ -25,6 +26,7 @@ class CaptureRequestTrackerTest {
         val pending = tracker.take()
         assertEquals(CaptureType.PACKAGING, pending?.metadata?.captureType)
         assertEquals("phone_ok_gesture", pending?.metadata?.trigger)
+        assertEquals("capture_packaging_1", pending?.metadata?.captureTaskId)
         assertEquals(4_000L, pending?.cooldownMs)
         assertNull(tracker.take())
     }

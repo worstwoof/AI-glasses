@@ -9,6 +9,8 @@ extension GlassCapturePackagingMetadata on GlassCapture {
 
   String? get mealSessionId => metadata['mealSessionId']?.toString();
 
+  String? get captureTaskId => metadata['captureTaskId']?.toString();
+
   int? get width => _metadataInt('width');
 
   int? get height => _metadataInt('height');

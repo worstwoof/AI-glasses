@@ -19,5 +19,6 @@ data class GlassesCaptureRequest(
     val trigger: String = "app_button",
     val scene: String? = null,
     val mealSessionId: String? = null,
+    val captureTaskId: String? = null,
     val timestamp: Long = System.currentTimeMillis(),
 )

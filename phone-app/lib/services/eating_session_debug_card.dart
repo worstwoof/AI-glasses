@@ -4,9 +4,14 @@ import 'eating_session_controller.dart';
 import 'glass_receiver_service.dart';
 
 class EatingSessionDebugCard extends StatelessWidget {
-  const EatingSessionDebugCard({super.key, required this.snapshot});
+  const EatingSessionDebugCard({
+    super.key,
+    required this.snapshot,
+    this.onCancel,
+  });
 
   final GlassReceiverSnapshot snapshot;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +65,18 @@ class EatingSessionDebugCard extends StatelessWidget {
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
+          const SizedBox(height: 8),
+          Text(
+            '采集模式：${_captureModeLabel(snapshot.captureMode.name)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '已采集：餐前 ${snapshot.mealBeforeCapture == null ? 0 : 1} · '
+            '餐中 ${snapshot.mealDuringCaptures.length} · '
+            '餐后 ${snapshot.mealAfterCapture == null ? 0 : 1}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           if (session.errorMessage != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -67,6 +84,45 @@ class EatingSessionDebugCard extends StatelessWidget {
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: const Color(0xFFE57E67),
                 fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          const Divider(height: 24),
+          Row(
+            children: [
+              Icon(Icons.tune_rounded, color: scheme.secondary, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Capture Coordinator',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Text(
+            '当前任务：${snapshot.captureCoordinator.scene ?? '无'}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Text(
+            '状态：${snapshot.captureCoordinator.state?.name ?? 'idle'} · '
+            '队列：${snapshot.captureCoordinator.queueLength}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (snapshot.captureCoordinator.taskId != null) ...[
+            const SizedBox(height: 2),
+            SelectableText(
+              'taskId  ${snapshot.captureCoordinator.taskId}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (session.state != EatingSessionState.idle && onCancel != null) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: onCancel,
+                icon: const Icon(Icons.cancel_outlined),
+                label: const Text('取消当前进食采集'),
               ),
             ),
           ],
@@ -96,6 +152,13 @@ class EatingSessionDebugCard extends StatelessWidget {
     );
   }
 }
+
+String _captureModeLabel(String mode) => switch (mode) {
+  'manual' => '手动',
+  'automatic' => '自动',
+  'hybrid' => '混合',
+  _ => mode,
+};
 
 class _CaptureThumb extends StatelessWidget {
   const _CaptureThumb({required this.label, required this.capture});

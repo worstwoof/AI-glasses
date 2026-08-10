@@ -1,311 +1,230 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import '../lib/services/eating_session_controller.dart';
+import 'package:ai_glasses_nutrition_app/packaging_models.dart';
+import 'package:ai_glasses_nutrition_app/services/capture_coordinator.dart';
+import 'package:ai_glasses_nutrition_app/services/capture_intent.dart';
+import 'package:ai_glasses_nutrition_app/services/capture_quality_evaluator.dart';
+import 'package:ai_glasses_nutrition_app/services/eating_session_controller.dart';
 
 void main() {
   group('EatingSessionController', () {
-    test(
-      'requires two open palms, waits, and acknowledges a matching meal-before capture',
-      () async {
-        final commands = <MealCaptureCommand>[];
-        final controller = EatingSessionController(
-          settleDelay: Duration.zero,
-          acknowledgementTimeout: const Duration(milliseconds: 100),
-          sessionIdGenerator: () => 'meal_test_1',
-          sendCapture: (command) async {
-            commands.add(command);
-            return true;
-          },
-        );
-        addTearDown(controller.dispose);
+    test('requires two open palms and a matching meal-before ACK', () async {
+      final harness = _Harness(sessionId: 'meal_test_1');
+      addTearDown(harness.dispose);
 
-        controller.onGesture('open_palm');
-        expect(controller.state, EatingSessionState.idle);
-        controller.onGesture('open_palm');
-        expect(controller.state, EatingSessionState.starting);
+      harness.controller.onGesture('open_palm');
+      expect(harness.controller.state, EatingSessionState.idle);
+      harness.controller.onGesture('open_palm');
+      expect(harness.controller.state, EatingSessionState.starting);
+      await _pump();
 
-        await _pumpTimers();
-        expect(commands, hasLength(1));
-        expect(commands.single.trigger, 'meal_start');
-        expect(commands.single.scene, 'meal_before');
-        expect(commands.single.mealSessionId, 'meal_test_1');
+      final intent = harness.intents.single;
+      expect(intent.trigger, 'meal_start');
+      expect(intent.scene, 'meal_before');
+      expect(intent.mealSessionId, 'meal_test_1');
+      expect(intent.delay, Duration.zero);
+      expect(harness.controller.state, EatingSessionState.starting);
 
-        expect(
-          controller.onCaptureReceived(
-            const MealCaptureAcknowledgement(
-              captureType: 'food',
-              scene: 'wrong_scene',
-              mealSessionId: 'meal_test_1',
-            ),
-          ),
-          isFalse,
-        );
-        expect(controller.state, EatingSessionState.starting);
-        expect(
-          controller.onCaptureReceived(
-            const MealCaptureAcknowledgement(
-              captureType: 'food',
-              scene: 'meal_before',
-              mealSessionId: 'meal_test_1',
-            ),
-          ),
-          isTrue,
-        );
-        expect(controller.state, EatingSessionState.eating);
-      },
-    );
+      expect(harness.acknowledge(taskId: 'wrong_task'), isFalse);
+      expect(harness.controller.state, EatingSessionState.starting);
+      expect(harness.acknowledge(taskId: intent.taskId), isTrue);
+      await _pump();
+      expect(harness.controller.state, EatingSessionState.eating);
+    });
 
     test(
-      'locks eating through unknown, no-hand, open-palm, and OK gestures',
+      'keeps eating latched through unknown, no-hand, open-palm, and OK',
       () async {
-        final commands = <MealCaptureCommand>[];
-        final controller = EatingSessionController(
-          settleDelay: Duration.zero,
-          sessionIdGenerator: () => 'meal_locked',
-          sendCapture: (command) async {
-            commands.add(command);
-            return true;
-          },
-        );
-        addTearDown(controller.dispose);
-
-        controller.onGesture('open_palm');
-        controller.onGesture('open_palm');
-        await _pumpTimers();
-        controller.onCaptureReceived(
-          const MealCaptureAcknowledgement(
-            captureType: 'food',
-            scene: 'meal_before',
-            mealSessionId: 'meal_locked',
-          ),
-        );
-        expect(controller.state, EatingSessionState.eating);
+        final harness = _Harness(sessionId: 'meal_locked');
+        addTearDown(harness.dispose);
+        await harness.startAndAccept();
 
         for (final gesture in const ['unknown', 'no_hand', 'open_palm', 'ok']) {
-          controller.onGesture(gesture);
-          expect(controller.state, EatingSessionState.eating);
+          harness.controller.onGesture(gesture);
+          expect(harness.controller.state, EatingSessionState.eating);
         }
-        expect(commands, hasLength(1));
+        expect(harness.intents, hasLength(1));
       },
     );
 
     test(
       'requires two fists and pairs meal-after with the active session',
       () async {
-        final commands = <MealCaptureCommand>[];
-        final controller = EatingSessionController(
-          settleDelay: Duration.zero,
-          acknowledgementTimeout: const Duration(milliseconds: 100),
-          sessionIdGenerator: () => 'meal_pair',
-          sendCapture: (command) async {
-            commands.add(command);
-            return true;
-          },
-        );
-        addTearDown(controller.dispose);
+        final harness = _Harness(sessionId: 'meal_pair');
+        addTearDown(harness.dispose);
+        await harness.startAndAccept();
 
-        controller.onGesture('open_palm');
-        controller.onGesture('open_palm');
-        await _pumpTimers();
-        controller.onCaptureReceived(
-          const MealCaptureAcknowledgement(
-            captureType: 'food',
-            scene: 'meal_before',
-            mealSessionId: 'meal_pair',
-          ),
-        );
+        harness.controller.onGesture('fist');
+        expect(harness.controller.state, EatingSessionState.eating);
+        harness.controller.onGesture('fist');
+        expect(harness.controller.state, EatingSessionState.ending);
+        await _pump();
 
-        controller.onGesture('fist');
-        expect(controller.state, EatingSessionState.eating);
-        controller.onGesture('fist');
-        expect(controller.state, EatingSessionState.ending);
-        await _pumpTimers();
-        expect(commands, hasLength(2));
-        expect(commands.last.trigger, 'meal_end');
-        expect(commands.last.scene, 'meal_after');
-        expect(commands.last.mealSessionId, 'meal_pair');
-
-        expect(
-          controller.onCaptureReceived(
-            const MealCaptureAcknowledgement(
-              captureType: 'food',
-              scene: 'meal_after',
-              mealSessionId: 'other_session',
-            ),
-          ),
-          isFalse,
-        );
-        expect(controller.state, EatingSessionState.ending);
-        expect(
-          controller.onCaptureReceived(
-            const MealCaptureAcknowledgement(
-              captureType: 'food',
-              scene: 'meal_after',
-              mealSessionId: 'meal_pair',
-            ),
-          ),
-          isTrue,
-        );
-        expect(controller.state, EatingSessionState.idle);
-        expect(controller.lastCompletedSessionId, 'meal_pair');
+        final intent = harness.intents.last;
+        expect(intent.trigger, 'meal_end');
+        expect(intent.scene, 'meal_after');
+        expect(intent.mealSessionId, 'meal_pair');
+        expect(harness.acknowledge(taskId: 'other_task'), isFalse);
+        expect(harness.controller.state, EatingSessionState.ending);
+        expect(harness.acknowledge(taskId: intent.taskId), isTrue);
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.idle);
+        expect(harness.controller.lastCompletedSessionId, 'meal_pair');
       },
     );
 
     test(
-      'send failure and acknowledgement timeout recover to the correct stable state',
+      'send failure and acknowledgement timeout recover to stable states',
       () async {
-        var shouldSend = false;
-        final controller = EatingSessionController(
-          settleDelay: Duration.zero,
+        final harness = _Harness(
+          sessionId: 'meal_failure',
           acknowledgementTimeout: const Duration(milliseconds: 10),
-          sessionIdGenerator: () => 'meal_failure',
-          sendCapture: (_) async => shouldSend,
         );
-        addTearDown(controller.dispose);
+        addTearDown(harness.dispose);
 
-        controller.onGesture('open_palm');
-        controller.onGesture('open_palm');
-        await _pumpTimers();
-        expect(controller.state, EatingSessionState.idle);
-        expect(controller.errorMessage, '餐前抓拍失败，请重新张手开始');
+        harness.shouldSend = false;
+        harness.controller.onGesture('open_palm');
+        harness.controller.onGesture('open_palm');
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.idle);
+        expect(harness.controller.errorMessage, '餐前抓拍失败，请重新张手开始');
 
-        shouldSend = true;
-        controller.onGesture('open_palm');
-        controller.onGesture('open_palm');
-        await _pumpTimers();
+        harness.shouldSend = true;
+        harness.controller.onGesture('open_palm');
+        harness.controller.onGesture('open_palm');
+        await _pump();
         await Future<void>.delayed(const Duration(milliseconds: 30));
-        expect(controller.state, EatingSessionState.idle);
+        expect(harness.controller.state, EatingSessionState.idle);
 
-        controller.onGesture('open_palm');
-        controller.onGesture('open_palm');
-        await _pumpTimers();
-        controller.onCaptureReceived(
-          const MealCaptureAcknowledgement(
-            captureType: 'food',
-            scene: 'meal_before',
-            mealSessionId: 'meal_failure',
-          ),
-        );
-        controller.onGesture('fist');
-        controller.onGesture('fist');
-        await _pumpTimers();
-        shouldSend = false;
-        await Future<void>.delayed(const Duration(milliseconds: 30));
-        expect(controller.state, EatingSessionState.eating);
+        await harness.startAndAccept();
+        harness.shouldSend = false;
+        harness.controller.onGesture('fist');
+        harness.controller.onGesture('fist');
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.eating);
       },
     );
 
     test('does not duplicate captures while starting or ending', () async {
-      final commands = <MealCaptureCommand>[];
-      final controller = EatingSessionController(
-        settleDelay: Duration.zero,
-        sessionIdGenerator: () => 'meal_single_command',
-        sendCapture: (command) async {
-          commands.add(command);
-          return true;
-        },
-      );
-      addTearDown(controller.dispose);
+      final harness = _Harness(sessionId: 'meal_single_command');
+      addTearDown(harness.dispose);
 
-      controller.onGesture('open_palm');
-      controller.onGesture('open_palm');
-      controller.onGesture('open_palm');
-      await _pumpTimers();
-      expect(commands, hasLength(1));
-
-      controller.onCaptureReceived(
-        const MealCaptureAcknowledgement(
-          captureType: 'food',
-          scene: 'meal_before',
-          mealSessionId: 'meal_single_command',
-        ),
+      harness.controller.onGesture('open_palm');
+      harness.controller.onGesture('open_palm');
+      harness.controller.onGesture('open_palm');
+      await _pump();
+      expect(harness.intents, hasLength(1));
+      expect(
+        harness.acknowledge(taskId: harness.intents.single.taskId),
+        isTrue,
       );
-      controller.onGesture('fist');
-      controller.onGesture('fist');
-      controller.onGesture('fist');
-      await _pumpTimers();
-      expect(commands, hasLength(2));
+      await _pump();
+
+      harness.controller.onGesture('fist');
+      harness.controller.onGesture('fist');
+      harness.controller.onGesture('fist');
+      await _pump();
+      expect(harness.intents, hasLength(2));
     });
 
-    test('recovers to a stable state when connection is lost', () async {
-      final controller = EatingSessionController(
-        settleDelay: Duration.zero,
-        sessionIdGenerator: () => 'meal_disconnect',
-        sendCapture: (_) async => true,
-      );
-      addTearDown(controller.dispose);
+    test(
+      'cancel clears STARTING, EATING, and ENDING and ignores late ACKs',
+      () async {
+        final harness = _Harness(sessionId: 'meal_cancel');
+        addTearDown(harness.dispose);
 
-      controller.onGesture('open_palm');
-      controller.onGesture('open_palm');
-      expect(controller.state, EatingSessionState.starting);
-      controller.onConnectionLost();
-      expect(controller.state, EatingSessionState.idle);
-      expect(controller.errorMessage, '餐前抓拍失败，请重新张手开始');
+        harness.controller.onGesture('open_palm');
+        harness.controller.onGesture('open_palm');
+        await _pump();
+        final startingTask = harness.intents.single.taskId;
+        harness.controller.cancel();
+        expect(harness.controller.state, EatingSessionState.idle);
+        expect(harness.acknowledge(taskId: startingTask), isFalse);
 
-      controller.onGesture('open_palm');
-      controller.onGesture('open_palm');
-      await _pumpTimers();
-      controller.onCaptureReceived(
-        const MealCaptureAcknowledgement(
-          captureType: 'food',
-          scene: 'meal_before',
-          mealSessionId: 'meal_disconnect',
-        ),
-      );
-      controller.onGesture('fist');
-      controller.onGesture('fist');
-      expect(controller.state, EatingSessionState.ending);
-      controller.onConnectionLost();
-      expect(controller.state, EatingSessionState.eating);
-      expect(controller.errorMessage, '餐后抓拍失败，请再次握拳结束');
-    });
+        await harness.startAndAccept();
+        harness.controller.cancel();
+        expect(harness.controller.state, EatingSessionState.idle);
 
-    test('returns to eating when meal-after send fails', () async {
-      var allowSend = true;
-      final controller = EatingSessionController(
-        settleDelay: Duration.zero,
-        sessionIdGenerator: () => 'meal_end_send_failure',
-        sendCapture: (_) async => allowSend,
-      );
-      addTearDown(controller.dispose);
+        await harness.startAndAccept();
+        harness.controller.onGesture('fist');
+        harness.controller.onGesture('fist');
+        await _pump();
+        final endingTask = harness.intents.last.taskId;
+        harness.controller.cancel();
+        expect(harness.controller.state, EatingSessionState.idle);
+        expect(harness.acknowledge(taskId: endingTask), isFalse);
+      },
+    );
 
-      controller.onGesture('open_palm');
-      controller.onGesture('open_palm');
-      await _pumpTimers();
-      controller.onCaptureReceived(
-        const MealCaptureAcknowledgement(
-          captureType: 'food',
-          scene: 'meal_before',
-          mealSessionId: 'meal_end_send_failure',
-        ),
-      );
-      allowSend = false;
-      controller.onGesture('fist');
-      controller.onGesture('fist');
-      await _pumpTimers();
-      expect(controller.state, EatingSessionState.eating);
-      expect(controller.errorMessage, '餐后抓拍失败，请再次握拳结束');
-    });
+    test('does not start on one open palm or an OK gesture', () async {
+      final harness = _Harness(sessionId: 'meal_gesture_guard');
+      addTearDown(harness.dispose);
 
-    test('does not start on one open palm or an OK gesture', () {
-      final commands = <MealCaptureCommand>[];
-      final controller = EatingSessionController(
-        sendCapture: (command) async {
-          commands.add(command);
-          return true;
-        },
-      );
-      addTearDown(controller.dispose);
-
-      controller.onGesture('open_palm');
-      controller.onGesture('ok');
-      expect(controller.state, EatingSessionState.idle);
-      expect(commands, isEmpty);
+      harness.controller.onGesture('open_palm');
+      harness.controller.onGesture('ok');
+      expect(harness.controller.state, EatingSessionState.idle);
+      expect(harness.intents, isEmpty);
     });
   });
 }
 
-Future<void> _pumpTimers() async {
+class _Harness {
+  _Harness({
+    required this.sessionId,
+    this.acknowledgementTimeout = const Duration(seconds: 1),
+  }) {
+    coordinator = CaptureCoordinator(
+      config: CaptureCoordinatorConfig(
+        acknowledgementTimeout: acknowledgementTimeout,
+      ),
+      dispatch: (intent) async {
+        intents.add(intent);
+        return shouldSend;
+      },
+      taskIdGenerator: () => 'capture_retry_${++taskNumber}',
+    );
+    controller = EatingSessionController(
+      captureCoordinator: coordinator,
+      settleDelay: Duration.zero,
+      sessionIdGenerator: () => sessionId,
+      taskIdGenerator: () => 'capture_task_${++taskNumber}',
+    );
+  }
+
+  final String sessionId;
+  final Duration acknowledgementTimeout;
+  final List<CaptureIntent> intents = <CaptureIntent>[];
+  late final CaptureCoordinator coordinator;
+  late final EatingSessionController controller;
+  bool shouldSend = true;
+  int taskNumber = 0;
+
+  Future<void> startAndAccept() async {
+    controller.onGesture('open_palm');
+    controller.onGesture('open_palm');
+    await _pump();
+    expect(intents, isNotEmpty);
+    expect(acknowledge(taskId: intents.last.taskId), isTrue);
+    await _pump();
+  }
+
+  bool acknowledge({required String taskId}) => coordinator.acknowledge(
+    CaptureAcknowledgement(
+      taskId: taskId,
+      captureType: CaptureType.food,
+      scene: intents.last.scene,
+      mealSessionId: sessionId,
+    ),
+    const CaptureQualityResult.accepted(),
+  );
+
+  void dispose() {
+    controller.dispose();
+    coordinator.dispose();
+  }
+}
+
+Future<void> _pump() async {
   await Future<void>.delayed(Duration.zero);
   await Future<void>.delayed(Duration.zero);
 }

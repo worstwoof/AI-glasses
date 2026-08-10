@@ -334,6 +334,7 @@ class WebRtcPreviewPublisher(
                     trigger = command.optString("trigger").trim().ifBlank { "app_button" },
                     scene = command.optString("scene").trim().ifBlank { null },
                     mealSessionId = command.optString("mealSessionId").trim().ifBlank { null },
+                    captureTaskId = command.optString("captureTaskId").trim().ifBlank { null },
                     timestamp = command.optLong("timestamp", System.currentTimeMillis()),
                 )
                 listener.onPreviewCaptureRequested(request)

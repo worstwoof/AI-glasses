@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../demo_data.dart';
 import '../models.dart';
+import '../packaging_models.dart';
 
 class LocalAppState {
   const LocalAppState({
@@ -26,6 +27,7 @@ class LocalStorageService {
   static const String _mealsKey = 'local_meals';
   static const String _isConnectedKey = 'local_is_connected';
   static const String _lastAnalysisKey = 'local_last_analysis';
+  static const String _packagingScansKey = 'local_packaging_scans';
 
   static final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
 
@@ -104,5 +106,35 @@ class LocalStorageService {
 
   static Future<void> saveLastAnalysis(AnalysisResult analysis) {
     return _prefs.setString(_lastAnalysisKey, jsonEncode(analysis.toMap()));
+  }
+
+  static Future<List<PackagingScanRecord>> loadPackagingScans() async {
+    final raw = await _prefs.getString(_packagingScansKey);
+    if (raw == null || raw.trim().isEmpty) return <PackagingScanRecord>[];
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      return decoded
+          .whereType<Map>()
+          .map(
+            (item) =>
+                PackagingScanRecord.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    } catch (_) {
+      return <PackagingScanRecord>[];
+    }
+  }
+
+  static Future<void> savePackagingScans(List<PackagingScanRecord> scans) {
+    final payload = scans.map((scan) => scan.toMap()).toList(growable: false);
+    return _prefs.setString(_packagingScansKey, jsonEncode(payload));
+  }
+
+  static Future<void> savePackagingScan(PackagingScanRecord record) async {
+    final scans = await loadPackagingScans();
+    scans.removeWhere((item) => item.id == record.id);
+    scans.insert(0, record);
+    await savePackagingScans(scans);
   }
 }
