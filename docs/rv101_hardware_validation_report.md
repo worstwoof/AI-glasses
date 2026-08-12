@@ -25,6 +25,7 @@ Date: 2026-08-13
 | Low-resolution scene frames | PARTIAL | 640x480 source frames continued at roughly 18 FPS; the reporter attempted JPEG quality 58 at the intended 1-second interval. Uploads failed safely with `ConnectException` because no phone server was present. |
 | WebRTC publisher | PARTIAL | Publisher initialized, created offers and retried safely. Signaling failed with `ConnectException` to the unavailable `192.168.43.1:8080`; no remote phone video was available. |
 | High-resolution JPEG | PASS | Debug-only, token-protected endpoint returned HTTP 202; final post-hardening JPEG completed and was saved. |
+| Release debug-path isolation | PASS | The compiled release variant was signed locally for diagnosis and installed on RV101; `POST /api/v1/glasses/debug-capture` returned HTTP 404. Debug APK was immediately restored afterward. |
 
 ## Actual Camera Capability and JPEG Evidence
 
@@ -50,7 +51,7 @@ The diagnostic endpoint is additionally hidden before token validation in non-de
 
 ## Release Packaging Boundary
 
-`assembleRelease` compiled the release source but stopped at the pre-existing `targetSdk = 30` `ExpiredTargetSdkVersion` lint error. This validation round did not raise the target SDK because RV101 is Android 12/API 32 and the compatibility migration needs separately scoped hardware testing. Debug hardware validation is unaffected.
+Full `assembleRelease` compiled the release source but stopped at the pre-existing `targetSdk = 30` `ExpiredTargetSdkVersion` lint error. For this endpoint-isolation check only, the same release variant was assembled with `lintVitalRelease` excluded, locally signed with the Android debug keystore, and installed on RV101; it returned the required 404. This validation round did not raise the target SDK because RV101 is Android 12/API 32 and the compatibility migration needs separately scoped hardware testing. Debug hardware validation is unaffected.
 
 ## Remaining Hardware Dependencies
 

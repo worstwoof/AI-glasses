@@ -30,7 +30,7 @@ Date: 2026-08-13
 ## Fresh Validation Commands
 
 - Phone: `flutter test` (56 passed), `flutter analyze --no-fatal-infos --no-fatal-warnings` (exit 0), `flutter build apk --debug` (PASS), `android/gradlew.bat :app:testDebugUnitTest` (3/3 PASS), and emulator install/launch (PASS).
-- Glasses: `gradlew.bat :app:compileDebugKotlin :app:compileDebugUnitTestKotlin :app:testDebugUnitTest :app:assembleDebug` (PASS). JVM tests: 13 total, 0 failures/errors. The final debug APK was reinstalled and hardware-captured after the debug-endpoint hardening. `assembleRelease` compiled release Kotlin but stopped at the existing `targetSdk=30` Play lint requirement; target SDK migration is outside this RV101 compatibility-validated round.
+- Glasses: `gradlew.bat :app:compileDebugKotlin :app:compileDebugUnitTestKotlin :app:testDebugUnitTest :app:assembleDebug` (PASS). JVM tests: 13 total, 0 failures/errors. The final debug APK was reinstalled and hardware-captured after the debug-endpoint hardening. Full `assembleRelease` stops at the existing `targetSdk=30` Play lint requirement, but the compiled release APK was assembled with only that lint task excluded, signed with the local debug keystore for hardware diagnosis, and verified on RV101: `POST /api/v1/glasses/debug-capture` returned `404` before Debug was restored.
 - RV101: install/launch/PID/CAMERA permission/Camera2 preview/high-resolution JPEG and preview restoration all have direct ADB/Logcat evidence in `docs/rv101_hardware_validation_report.md`.
 
 ## RV101 Matrix
