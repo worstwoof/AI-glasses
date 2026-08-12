@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     private var autoStartAttempted = false
     private var startWhenBound = false
     private var windowFocused = false
+    private var activityResumed = false
     private var startAfterFocus = false
 
     private val serviceConnection = object : ServiceConnection {
@@ -68,8 +69,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         DebugStatus.write(this, "MainActivity.onResume")
         scheduleAutoStart()
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -170,9 +177,23 @@ class MainActivity : AppCompatActivity() {
     private fun scheduleAutoStart() {
         if (autoStartAttempted) return
         DebugStatus.write(this, "MainActivity.scheduleAutoStart")
-        if (!isWindowReadyForCamera()) {
+        val initialDelay = CameraStartupPolicy.initialDelayMs(
+            resumed = activityResumed,
+            hasWindowFocus = windowFocused || hasWindowFocus(),
+        )
+        if (initialDelay == null) {
             startAfterFocus = true
             DebugStatus.write(this, "MainActivity.scheduleAutoStart waitingForFocus")
+            return
+        }
+        if (CameraStartupPolicy.shouldStartSynchronously(
+                resumed = activityResumed,
+                hasWindowFocus = windowFocused || hasWindowFocus(),
+            )
+        ) {
+            autoStartAttempted = true
+            DebugStatus.write(this, "MainActivity.autoStartImmediate")
+            requestStartCapture()
             return
         }
         statusText.postDelayed({
@@ -184,10 +205,13 @@ class MainActivity : AppCompatActivity() {
                 startAfterFocus = true
                 DebugStatus.write(this, "MainActivity.autoStartDelayed waitingForFocus")
             }
-        }, 300)
+        }, initialDelay)
     }
 
-    private fun isWindowReadyForCamera(): Boolean = windowFocused || hasWindowFocus()
+    private fun isWindowReadyForCamera(): Boolean = CameraStartEligibility.canStartCamera(
+        resumed = activityResumed,
+        hasWindowFocus = windowFocused || hasWindowFocus(),
+    )
 
     override fun onRequestPermissionsResult(
         requestCode: Int,

@@ -38,6 +38,8 @@ migrate_working_dir/
 **/local.properties
 apk-share/
 screenshots/
+/docs/hardware_artifacts/
+/docs/rv101_*_log.txt
 *.apk
 *.aab
 

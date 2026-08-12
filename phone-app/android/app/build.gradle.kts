@@ -39,4 +39,5 @@ flutter {
 
 dependencies {
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
+    testImplementation("junit:junit:4.13.2")
 }

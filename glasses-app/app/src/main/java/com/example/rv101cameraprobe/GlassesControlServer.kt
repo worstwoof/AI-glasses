@@ -24,6 +24,7 @@ class GlassesControlServer(
     interface Listener {
         fun onControlStartRequested(uploadEndpoint: String?, token: String?): GlassesControlResponse
         fun onControlStatusRequested(): GlassesControlResponse
+        fun onDebugCaptureRequested(): GlassesControlResponse
     }
 
     private val appContext = context.applicationContext
@@ -135,13 +136,19 @@ class GlassesControlServer(
         if (method == "GET" && path == STATUS_PATH) {
             return listener.onControlStatusRequested()
         }
-        if (method != "POST" || path != START_PATH) {
+        if (method != "POST" || (path != START_PATH && path != DebugCaptureEndpointPolicy.path)) {
             return GlassesControlResponse(
                 404,
                 JSONObject()
                     .put("accepted", false)
                     .put("device", DEVICE_NAME)
-                    .put("message", "Not found"),
+                .put("message", "Not found"),
+            )
+        }
+        if (DebugCaptureEndpointPolicy.shouldHideBeforeAuthentication(BuildConfig.DEBUG, path)) {
+            return GlassesControlResponse(
+                404,
+                JSONObject().put("accepted", false).put("message", "Not found"),
             )
         }
         val suppliedToken = headers["x-device-token"].orEmpty()
@@ -155,6 +162,17 @@ class GlassesControlServer(
                     .put("device", DEVICE_NAME)
                     .put("message", "Pairing token rejected"),
             )
+        }
+
+        if (path == DebugCaptureEndpointPolicy.path) {
+            return if (DebugCaptureEndpointPolicy.isAllowed(BuildConfig.DEBUG, method, path)) {
+                listener.onDebugCaptureRequested()
+            } else {
+                GlassesControlResponse(
+                    404,
+                    JSONObject().put("accepted", false).put("message", "Not found"),
+                )
+            }
         }
 
         val json = runCatching { JSONObject(body.ifBlank { "{}" }) }.getOrElse { JSONObject() }

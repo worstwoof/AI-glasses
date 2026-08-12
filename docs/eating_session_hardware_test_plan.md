@@ -24,7 +24,9 @@
 | Test | Expected | Actual Result | PASS/FAIL | Notes |
 | --- | --- | --- | --- | --- |
 | WebRTC | Continuous live video before, during, and after capture |  |  |  |
-| Scene frame | Approximately 1 FPS |  |  |  |
+| Scene frame | Approximately 1 FPS | RV101 repeatedly generated 640x480 frames; no receiver | PARTIAL | Reporter attempted 1 FPS uploads; absent phone server produced handled `ConnectException`. |
+| RV101 camera open / preview | Camera opens and 640x480 session runs | Camera 0 opened; preview session configured; about 18 FPS | PASS | Automated 2026-08-13. |
+| RV101 high-resolution JPEG | Select closest JPEG and preserve preview | Selected/actual 4032x3024 valid JPEG; preview restored | PASS | Debug-only token-protected diagnostic capture; see `rv101_hardware_validation_report.md`. |
 | OPEN_PALM frame 1 | Remains `IDLE`; no command |  |  |  |
 | OPEN_PALM frame 2 | Enters `STARTING` |  |  |  |
 | Settle delay | Two seconds lets the hand leave the frame |  |  |  |
@@ -46,4 +48,4 @@
 - Whether the WebRTC frame counter and low-resolution scene frame counter continue through both still captures.
 - Any camera fallback, upload timeout, wrong-session upload, or reconnect behavior.
 
-Hardware status is intentionally `NOT VERIFIED ON HARDWARE` until the RV101 and phone are exercised with this matrix.
+Hardware status: RV101 automated camera rows above are verified. WebRTC remote video, phone ACK/session rows, packaging OCR, and real-person gesture rows remain `PENDING USER INTERACTION` or `PENDING PHONE HARDWARE` until the phone and user are available.

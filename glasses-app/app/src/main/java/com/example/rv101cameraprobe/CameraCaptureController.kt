@@ -385,6 +385,10 @@ class CameraCaptureController(
             requireNotNull(appContext.getExternalFilesDir(Environment.DIRECTORY_PICTURES)),
             "captures/capture_${System.currentTimeMillis()}_full.jpg",
         ).apply { parentFile?.mkdirs() }
+        DebugStatus.write(
+            appContext,
+            "Capture.jpegCompleted ${image.width}x${image.height} bytes=${bytes.size} file=${outputFile.name}",
+        )
         photoExecutor.execute {
             try {
                 FileOutputStream(outputFile).use { it.write(bytes) }

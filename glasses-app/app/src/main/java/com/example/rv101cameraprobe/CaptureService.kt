@@ -217,6 +217,7 @@ class CaptureService : Service(),
 
     override fun onCameraReady(previewSize: Size, photoSize: Size) {
         DebugStatus.write(this, "CaptureService.onCameraReady ${previewSize.width}x${previewSize.height}")
+        DebugStatus.write(this, "Camera.jpegSelected ${photoSize.width}x${photoSize.height}")
         ensurePreviewPublisherStarted()
         publish(status.copy(
             state = if (cooldownUntilMs > System.currentTimeMillis()) CaptureState.COOLDOWN else CaptureState.DETECTING,
@@ -257,6 +258,12 @@ class CaptureService : Service(),
             ?: PendingCapture(DEFAULT_CAPTURE_METADATA, GESTURE_COOLDOWN_MS)
         val uploadMetadata = pendingCapture.metadata.copy(
             captureSource = if (path.endsWith("_full.jpg")) "high_res_jpeg" else "preview_fallback",
+        )
+        DebugStatus.write(
+            this,
+            "Capture.saved source=${uploadMetadata.captureSource} type=${uploadMetadata.captureType.wireValue} " +
+                "scene=${uploadMetadata.scene} session=${uploadMetadata.mealSessionId ?: "none"} " +
+                "task=${uploadMetadata.captureTaskId ?: "none"} path=${java.io.File(path).name}",
         )
         val cooldownMs = pendingCapture.cooldownMs
         uploadMessage = "Photo saved; uploading to phone"
@@ -383,12 +390,51 @@ class CaptureService : Service(),
                 .put("previewControlReady", status.previewControlReady),
         )
 
+    override fun onDebugCaptureRequested(): GlassesControlResponse {
+        if (!BuildConfig.DEBUG) {
+            return GlassesControlResponse(
+                404,
+                JSONObject().put("accepted", false).put("message", "Not found"),
+            )
+        }
+        if (!running) {
+            return GlassesControlResponse(
+                409,
+                JSONObject().put("accepted", false).put("message", "Camera service is not running"),
+            )
+        }
+        mainHandler.post {
+            requestPhoto(
+                metadata = CaptureUploadMetadata(
+                    trigger = "debug_http",
+                    scene = "rv101_diagnostic",
+                    sceneConfidence = 0f,
+                    captureType = CaptureType.FOOD,
+                    timestamp = System.currentTimeMillis(),
+                ),
+                cooldownMs = 0L,
+                nextStatus = status,
+                message = "Debug endpoint requested JPEG capture",
+            )
+        }
+        return GlassesControlResponse(
+            202,
+            JSONObject().put("accepted", true).put("message", "JPEG capture requested"),
+        )
+    }
+
     private fun requestPhoto(
         metadata: CaptureUploadMetadata,
         cooldownMs: Long,
         nextStatus: CaptureStatus,
         message: String,
     ) {
+        DebugStatus.write(
+            this,
+            "Capture.request trigger=${metadata.trigger} type=${metadata.captureType.wireValue} " +
+                "scene=${metadata.scene} session=${metadata.mealSessionId ?: "none"} " +
+                "task=${metadata.captureTaskId ?: "none"}",
+        )
         if (!captureRequestTracker.begin(metadata, cooldownMs)) {
             publish(nextStatus.copy(state = CaptureState.CAPTURING, message = "A JPEG capture is already in progress"))
             return
