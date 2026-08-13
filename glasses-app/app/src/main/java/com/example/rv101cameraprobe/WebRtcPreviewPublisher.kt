@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.DataChannel
@@ -49,6 +50,12 @@ private data class RemoteAnswer(
     val candidates: List<IceCandidate>,
 )
 
+private data class PendingLocalOffer(
+    val signalingEndpoint: String,
+    val description: SessionDescription,
+    val candidates: List<IceCandidate>,
+)
+
 class WebRtcPreviewPublisher(
     context: Context,
     private val listener: Listener,
@@ -69,6 +76,8 @@ class WebRtcPreviewPublisher(
     @Volatile private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
     private var dataChannel: DataChannel? = null
+    private var pendingLocalOffer: PendingLocalOffer? = null
+    private var remoteDescriptionApplied = false
     private var iceGatheringLatch: CountDownLatch? = null
     private val localCandidateLock = Any()
     private val localCandidates = mutableListOf<IceCandidate>()
@@ -160,42 +169,68 @@ class WebRtcPreviewPublisher(
             val signalingEndpoint = deriveSignalingEndpoint(settings.endpoint)
             val hotspotPrefix = ipv4Prefix(Uri.parse(signalingEndpoint).host.orEmpty())
             DebugStatus.write(appContext, "WebRtcPreviewPublisher.connect endpoint=$signalingEndpoint prefix=$hotspotPrefix")
-            initializeFactoryIfNeeded()
-            releasePeerConnection()
-            report(PreviewConnectionStatus("connecting", "Creating WebRTC offer"))
+            val pendingOffer = pendingLocalOffer
+            val reusePendingOffer =
+                pendingOffer != null &&
+                    pendingOffer.signalingEndpoint == signalingEndpoint &&
+                    peerConnection != null &&
+                    WebRtcReconnectPolicy.actionFor(
+                        hasPendingOffer = true,
+                        remoteDescriptionApplied = remoteDescriptionApplied,
+                    ) == WebRtcReconnectAction.REUSE_PENDING_OFFER
+            val localPeer: PeerConnection
+            val localDescription: SessionDescription
+            val offerCandidates: List<IceCandidate>
+            if (reusePendingOffer) {
+                DebugStatus.write(appContext, "WebRtcPreviewPublisher.reusePendingOffer")
+                localPeer = requireNotNull(peerConnection)
+                localDescription = pendingOffer.description
+                offerCandidates = pendingOffer.candidates
+                report(PreviewConnectionStatus("signaling", "Retrying pending offer to phone"))
+            } else {
+                DebugStatus.write(appContext, "WebRtcPreviewPublisher.createPeer")
+                initializeFactoryIfNeeded()
+                releasePeerConnection()
+                report(PreviewConnectionStatus("connecting", "Creating WebRTC offer"))
 
-            val localFactory = requireNotNull(factory)
-            val localVideoSource = localFactory.createVideoSource(false)
-            val localVideoTrack = localFactory.createVideoTrack(VIDEO_TRACK_ID, localVideoSource).apply {
-                setEnabled(true)
-            }
-            val config = PeerConnection.RTCConfiguration(emptyList()).apply {
-                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
-                iceTransportsType = PeerConnection.IceTransportsType.ALL
-            }
-            val localPeer = requireNotNull(localFactory.createPeerConnection(config, peerObserver))
-            val controlChannel = localPeer.createDataChannel(CONTROL_CHANNEL_LABEL, DataChannel.Init().apply {
-                ordered = true
-            })
-            controlChannel.registerObserver(controlObserver)
-            localPeer.addTrack(localVideoTrack, listOf(STREAM_ID))
+                val localFactory = requireNotNull(factory)
+                val localVideoSource = localFactory.createVideoSource(false)
+                val localVideoTrack = localFactory.createVideoTrack(VIDEO_TRACK_ID, localVideoSource).apply {
+                    setEnabled(true)
+                }
+                val config = PeerConnection.RTCConfiguration(emptyList()).apply {
+                    sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                    continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+                    iceTransportsType = PeerConnection.IceTransportsType.ALL
+                }
+                localPeer = requireNotNull(localFactory.createPeerConnection(config, peerObserver))
+                val controlChannel = localPeer.createDataChannel(CONTROL_CHANNEL_LABEL, DataChannel.Init().apply {
+                    ordered = true
+                })
+                controlChannel.registerObserver(controlObserver)
+                localPeer.addTrack(localVideoTrack, listOf(STREAM_ID))
 
-            peerConnection = localPeer
-            videoSource = localVideoSource
-            videoTrack = localVideoTrack
-            dataChannel = controlChannel
-            synchronized(localCandidateLock) {
-                localCandidates.clear()
-            }
-            sentFrames = 0
-            firstSentFrameMs = 0
+                peerConnection = localPeer
+                videoSource = localVideoSource
+                videoTrack = localVideoTrack
+                dataChannel = controlChannel
+                synchronized(localCandidateLock) {
+                    localCandidates.clear()
+                }
+                sentFrames = 0
+                firstSentFrameMs = 0
 
-            val offer = createOffer(localPeer)
-            setLocalDescription(localPeer, offer)
-            waitForIceGathering(localPeer)
-            val localDescription = filterSdpCandidates(localPeer.localDescription ?: offer, hotspotPrefix)
-            val offerCandidates = filterCandidates(snapshotLocalCandidates(), hotspotPrefix)
+                val offer = createOffer(localPeer)
+                setLocalDescription(localPeer, offer)
+                waitForIceGathering(localPeer)
+                localDescription = filterSdpCandidates(localPeer.localDescription ?: offer, hotspotPrefix)
+                offerCandidates = filterCandidates(snapshotLocalCandidates(), hotspotPrefix)
+                pendingLocalOffer = PendingLocalOffer(
+                    signalingEndpoint = signalingEndpoint,
+                    description = localDescription,
+                    candidates = offerCandidates,
+                )
+            }
             DebugStatus.write(appContext, "WebRtcPreviewPublisher.offer candidates=${offerCandidates.size}")
             report(PreviewConnectionStatus("signaling", "Sending offer to phone"))
             val answer = postOffer(signalingEndpoint, settings.token, localDescription, offerCandidates)
@@ -204,11 +239,16 @@ class WebRtcPreviewPublisher(
             filterCandidates(answer.candidates, hotspotPrefix).forEach { candidate ->
                 localPeer.addIceCandidate(candidate)
             }
+            remoteDescriptionApplied = true
+            pendingLocalOffer = null
             reconnectAttempt = 0
             report(PreviewConnectionStatus("connected", "Offer accepted; waiting for ICE/video", controlReady = false))
         } catch (error: Exception) {
             DebugStatus.write(appContext, "WebRtcPreviewPublisher.error ${error.javaClass.simpleName}:${error.message}")
             Log.w(TAG, "WebRTC preview connection failed", error)
+            if (error !is IOException) {
+                releasePeerConnection()
+            }
             report(PreviewConnectionStatus("error", "WebRTC preview failed: ${error.javaClass.simpleName}"))
             scheduleReconnect()
         } finally {
@@ -236,6 +276,8 @@ class WebRtcPreviewPublisher(
     private fun releasePeerConnection() {
         iceGatheringLatch?.countDown()
         iceGatheringLatch = null
+        pendingLocalOffer = null
+        remoteDescriptionApplied = false
         dataChannel?.unregisterObserver()
         dataChannel?.close()
         dataChannel?.dispose()

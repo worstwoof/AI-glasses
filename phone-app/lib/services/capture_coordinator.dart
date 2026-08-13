@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import '../packaging_models.dart';
 import 'capture_intent.dart';
@@ -64,15 +65,18 @@ class CaptureCoordinatorConfig {
     this.acknowledgementTimeout = const Duration(seconds: 12),
     this.automaticCooldown = const Duration(seconds: 8),
     this.packagingCooldown = const Duration(seconds: 8),
+    this.completedTaskHistoryLimit = 512,
   });
 
   final Duration acknowledgementTimeout;
   final Duration automaticCooldown;
   final Duration packagingCooldown;
+  final int completedTaskHistoryLimit;
 }
 
 typedef CaptureDispatcher = Future<bool> Function(CaptureIntent intent);
 typedef CaptureTaskIdGenerator = String Function();
+typedef CaptureDispatchEligibility = bool Function(CaptureIntent intent);
 
 class CaptureCoordinator {
   CaptureCoordinator({
@@ -80,20 +84,26 @@ class CaptureCoordinator {
     this.config = const CaptureCoordinatorConfig(),
     DateTime Function()? now,
     CaptureTaskIdGenerator? taskIdGenerator,
+    CaptureDispatchEligibility? isDispatchAllowed,
     void Function(CaptureCoordinatorSnapshot snapshot)? onChanged,
   }) : _dispatch = dispatch,
        _now = now ?? DateTime.now,
        _taskIdGenerator = taskIdGenerator ?? _defaultTaskId,
+       _isDispatchAllowed = isDispatchAllowed ?? _allowDispatch,
        _onChanged = onChanged;
 
   final CaptureDispatcher _dispatch;
   final CaptureCoordinatorConfig config;
   final DateTime Function() _now;
   final CaptureTaskIdGenerator _taskIdGenerator;
+  final CaptureDispatchEligibility _isDispatchAllowed;
   final void Function(CaptureCoordinatorSnapshot snapshot)? _onChanged;
   final List<_CaptureJob> _queue = <_CaptureJob>[];
   final Map<CaptureCooldownGroup, DateTime> _cooldownUntil =
       <CaptureCooldownGroup, DateTime>{};
+  final Set<String> _inFlightTaskIds = <String>{};
+  final Set<String> _completedTaskIds = <String>{};
+  final Queue<String> _completedTaskIdOrder = Queue<String>();
   _CaptureJob? _active;
   Timer? _delayTimer;
   Timer? _acknowledgementTimer;
@@ -115,6 +125,15 @@ class CaptureCoordinator {
           taskId: intent.taskId,
           state: CaptureTaskState.failed,
           message: 'CaptureCoordinator has been disposed',
+        ),
+      );
+    }
+    if (!_reserveTaskId(intent.taskId)) {
+      return Future<CaptureTaskResult>.value(
+        CaptureTaskResult(
+          taskId: intent.taskId,
+          state: CaptureTaskState.dropped,
+          message: 'duplicate capture task ID',
         ),
       );
     }
@@ -154,9 +173,18 @@ class CaptureCoordinator {
     }
     if (job.retakeCount < intent.retryPolicy.maxRetakes &&
         intent.qualityPolicy.allowsRetake) {
+      final retryTaskId = _taskIdGenerator();
+      if (!_reserveTaskId(retryTaskId)) {
+        _finishActive(
+          CaptureTaskState.failed,
+          message: 'retry capture task ID collision',
+        );
+        return true;
+      }
       job.retakeCount += 1;
+      _rememberCompletedTaskId(intent.taskId);
       job.intent = intent.copyWith(
-        taskId: _taskIdGenerator(),
+        taskId: retryTaskId,
         source: CaptureIntentSource.retake,
         delay: Duration.zero,
       );
@@ -166,7 +194,7 @@ class CaptureCoordinator {
       return true;
     }
     _finishActive(
-      intent.source == CaptureIntentSource.automatic
+      intent.isAutomaticOrigin
           ? CaptureTaskState.dropped
           : CaptureTaskState.failed,
       message: quality.issues.map((issue) => issue.name).join(', '),
@@ -199,6 +227,23 @@ class CaptureCoordinator {
     _pump();
   }
 
+  /// Stops only delayed/queued work. A command already sent to the glasses is
+  /// allowed to complete so a real camera capture does not become orphaned.
+  void cancelPendingWhere(bool Function(CaptureIntent intent) predicate) {
+    final queued = _queue.where((job) => predicate(job.intent)).toList();
+    for (final job in queued) {
+      _queue.remove(job);
+      _complete(job, CaptureTaskState.cancelled);
+    }
+    if (_active != null &&
+        _active!.state == CaptureTaskState.waitingDelay &&
+        predicate(_active!.intent)) {
+      _cancelActive(pump: false);
+    }
+    _emit();
+    _pump();
+  }
+
   void dispose() {
     _disposed = true;
     _delayTimer?.cancel();
@@ -214,7 +259,7 @@ class CaptureCoordinator {
   void _preemptDelayedAutomaticFor(CaptureIntent next) {
     final active = _active;
     if (active == null || active.state != CaptureTaskState.waitingDelay) return;
-    if (active.intent.source != CaptureIntentSource.automatic ||
+    if (!active.intent.isAutomaticOrigin ||
         next.priority.rank >= active.intent.priority.rank) {
       return;
     }
@@ -247,6 +292,13 @@ class CaptureCoordinator {
 
   Future<void> _dispatchActive(_CaptureJob job) async {
     if (_active != job || _disposed) return;
+    if (!_isDispatchAllowed(job.intent)) {
+      _finishActive(
+        CaptureTaskState.dropped,
+        message: 'capture dispatch is not currently allowed',
+      );
+      return;
+    }
     job.state = CaptureTaskState.dispatching;
     _emit();
     bool sent;
@@ -300,6 +352,7 @@ class CaptureCoordinator {
 
   void _complete(_CaptureJob job, CaptureTaskState state, {String? message}) {
     job.state = state;
+    _rememberCompletedTaskId(job.intent.taskId);
     if (!job.completer.isCompleted) {
       job.completer.complete(
         CaptureTaskResult(
@@ -311,8 +364,26 @@ class CaptureCoordinator {
     }
   }
 
+  bool _reserveTaskId(String taskId) {
+    if (_inFlightTaskIds.contains(taskId) ||
+        _completedTaskIds.contains(taskId)) {
+      return false;
+    }
+    _inFlightTaskIds.add(taskId);
+    return true;
+  }
+
+  void _rememberCompletedTaskId(String taskId) {
+    _inFlightTaskIds.remove(taskId);
+    if (!_completedTaskIds.add(taskId)) return;
+    _completedTaskIdOrder.addLast(taskId);
+    while (_completedTaskIdOrder.length > config.completedTaskHistoryLimit) {
+      _completedTaskIds.remove(_completedTaskIdOrder.removeFirst());
+    }
+  }
+
   bool _isCooldownBlocked(CaptureIntent intent) {
-    if (intent.source != CaptureIntentSource.automatic ||
+    if (!intent.isAutomaticOrigin ||
         intent.cooldownGroup == CaptureCooldownGroup.none) {
       return false;
     }
@@ -338,6 +409,8 @@ class CaptureCoordinator {
     final now = DateTime.now().microsecondsSinceEpoch;
     return 'capture_${now}_${now % 997}';
   }
+
+  static bool _allowDispatch(CaptureIntent _) => true;
 }
 
 class _CaptureJob {

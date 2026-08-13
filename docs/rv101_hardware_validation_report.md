@@ -37,6 +37,9 @@ Date: 2026-08-13
 - Final capture: `capture_1786566480603_full.jpg`; Camera2 diagnostic reported `4032x3024`, 5,672,929 bytes.
 - Pulled artifact: `docs/hardware_artifacts/rv101_capture_final_full.jpg` (ignored by Git); JPEG signature `FFD8FFE1`, dimensions `4032x3024`, SHA-256 `E2953C5A0C09E545B44C5356AABDA3B6F6AF34178B48CF218E75631130B4E66F`.
 - Final post-hardening capture: `capture_1786567706571_full.jpg`, 5,650,633 bytes. Pulled as ignored `docs/hardware_artifacts/rv101_capture_post_policy_full.jpg`; signature `FFD8FFE1`, dimensions `4032x3024`, SHA-256 `9358D8D9E6FEF24E0DF6C5C91F4083C9378976CEEA92DE5A92C805EB43F78F50`.
+- Final rebuilt-debug retest: the new Debug APK was installed with `adb -s 1906092624103119 install -r`; `POST /api/v1/glasses/debug-capture` through an explicit ADB forward returned HTTP 202. It saved `capture_1786569974075_full.jpg`, 3,892,242 bytes; the pulled temporary artifact had `FFD8FFE1`, dimensions `4032x3024`, SHA-256 `B5BB43FF0329ED277312F0CE5BA8F6D306EE818A96FA5FFE9A09AFB51F2195D0`. The status endpoint returned to `DETECTING`, and Logcat showed a new `Camera session configured id=0 preview=640x480` followed by growing frame counts.
+- Local mock receiver retest: the rebuilt Debug APK sent a real high-resolution multipart request to `POST /api/v1/captures` (2,216,546 bytes). The receiver returned HTTP 200 with `{"accepted":true}`, exercising the broadened 2xx acceptance policy; the capture status/log path recorded `Photo uploaded to phone` rather than a rejection.
+- Reconnected-device retest (11:12-11:13): after reinstalling the Debug APK, the explicit status endpoint returned HTTP 200 with `running=true` and `Camera ready: 640x480; photo 4032x3024`; the process stayed at PID `18286`. A fresh debug capture returned HTTP 202, completed as `4032x3024` / 2,679,689 bytes, logged `Capture.saved`, and reconfigured the preview session. Frame counts continued from 1,185 to above 1,200 after the still capture. With the phone endpoint absent, the final status was `Upload failed: ConnectException; photo kept locally`, which is the expected offline fallback.
 - Capture was locally persisted when upload failed. Metadata code reads image bounds before upload, so it reports the actual file dimensions.
 
 ## Hardware Defect Found and Fixed
@@ -48,6 +51,8 @@ Root cause: the device does not provide stable window focus/surface for this act
 Fix: start from the resumed lifecycle state immediately, preserve the non-exported service and token checks, and add JVM coverage for lifecycle eligibility/timing. Hardware retest with `KEYCODE_WAKEUP` plus `svc power stayon true` opened Camera2, configured preview, captured the real JPEG, and restored preview.
 
 The diagnostic endpoint is additionally hidden before token validation in non-debug builds, so release requests receive 404 rather than exposing a debug route through an authentication response. The debug policy has a JVM regression test; the post-hardening debug APK was rebuilt, reinstalled, and captured successfully on RV101.
+
+WebRTC reconnect defect: the previous implementation destroyed and recreated the native peer on every retry while the phone answer was still unavailable. On RV101 this eventually produced native `SIGSEGV` crashes on `signaling_thread` inside `libjingle_peerconnection_so.so` (observed at 05:33:03 and 06:23:37). The fix retains the pending local offer/peer connection until an answer is applied, and only rebuilds after negotiation failure or an applied remote description. The rebuilt APK short-window retest emitted one `createPeer`, then `reusePendingOffer`, with the process remaining alive; JVM coverage is in `WebRtcReconnectPolicyTest`.
 
 ## Release Packaging Boundary
 

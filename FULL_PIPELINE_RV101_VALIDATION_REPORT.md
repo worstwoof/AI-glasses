@@ -29,17 +29,31 @@ Date: 2026-08-13
 
 ## Fresh Validation Commands
 
-- Phone: `flutter test` (56 passed), `flutter analyze --no-fatal-infos --no-fatal-warnings` (exit 0), `flutter build apk --debug` (PASS), `android/gradlew.bat :app:testDebugUnitTest` (3/3 PASS), and emulator install/launch (PASS).
+- Phone: `flutter test` (69 passed), `flutter analyze --no-fatal-infos --no-fatal-warnings` (exit 0; 74 pre-existing deprecation infos), `flutter build apk --debug` (PASS), `android/gradlew.bat :app:testDebugUnitTest` (3/3 PASS), and fresh emulator install/launch (PASS, `com.aiglasses.nutrition/.MainActivity` top-resumed).
 - Glasses: `gradlew.bat :app:compileDebugKotlin :app:compileDebugUnitTestKotlin :app:testDebugUnitTest :app:assembleDebug` (PASS). JVM tests: 13 total, 0 failures/errors. The final debug APK was reinstalled and hardware-captured after the debug-endpoint hardening. Full `assembleRelease` stops at the existing `targetSdk=30` Play lint requirement, but the compiled release APK was assembled with only that lint task excluded, signed with the local debug keystore for hardware diagnosis, and verified on RV101: `POST /api/v1/glasses/debug-capture` returned `404` before Debug was restored.
 - RV101: install/launch/PID/CAMERA permission/Camera2 preview/high-resolution JPEG and preview restoration all have direct ADB/Logcat evidence in `docs/rv101_hardware_validation_report.md`.
+- RV101 mock-phone upload: a real 2,216,546-byte `POST /api/v1/captures` received HTTP 200 `{"accepted":true}` and produced the `Photo uploaded to phone` status path. No phone hardware was involved.
+
+## Final Hardening Addendum
+
+- Coordinator: duplicate `captureTaskId` submissions are rejected for in-flight and recently completed work, bounded to 512 completed IDs. A 120-intent mixed-priority test confirms a single in-flight physical capture and queue drain.
+- Retry provenance: a retry keeps its `originSource`, so an automatic task remains subject to automatic cooldown, automatic duplicate fingerprinting, meal-end cancellation, and background cancellation even though its current source is `retake`.
+- Lifecycle: entering `RecognitionPageFast` enables automatic capture; backgrounding or disposal disables it. Queued/delayed automatic work is cancelled, while an already dispatched request remains awaiting ACK to avoid orphaning a real glasses capture.
+- Upload idempotence: phone-side capture ingestion deduplicates in-flight and completed uploads by `captureTaskId`; failed deliveries may retry, and legacy uploads without an ID remain accepted.
+- Packaging: a new `SharedPreferencesAsync` in-memory integration test verifies `LocalStorageService.savePackagingScan` followed by `loadPackagingScans`; packaging remains separate from `MealRecord`.
 
 ## RV101 Matrix
 
 - Detection: PASS, serial `1906092624103119`, Rokid RG-glasses, Android 12/API 32, authorized/stable.
 - Install / launch / process: PASS.
 - Camera open, preview and low-resolution frame generation: PASS. Scene upload lifecycle: PARTIAL because the phone server was absent; `ConnectException` was handled without crash.
-- High-resolution still: PASS. Selected and actual JPEG: `4032x3024`; the final post-hardening sample is a valid 5,650,633-byte JPEG and preview reconfigured after capture.
+- High-resolution still: PASS. Selected and actual JPEG: `4032x3024`; the final post-hardening sample is a valid 5,650,633-byte JPEG and preview reconfigured after capture. A final rebuilt-debug retest produced another valid `4032x3024` JPEG (3,892,242 bytes, SHA-256 `B5BB43FF0329ED277312F0CE5BA8F6D306EE818A96FA5FFE9A09AFB51F2195D0`) after `POST /api/v1/glasses/debug-capture` returned HTTP 202.
+- Reconnected RV101 retest: status HTTP 200 showed `running=true`; a new HTTP 202 debug capture produced `4032x3024` / 2,679,689 bytes, `Capture.saved`, and preview reconfiguration. The process remained alive while the phone endpoint was unavailable and the image was kept locally.
 - WebRTC: publisher and ICE offer lifecycle initialized, but remote video is not PASS because the phone signaling endpoint was unavailable.
+
+### WebRTC native crash hardening
+
+The old retry loop recreated the native peer while an unanswered offer was still pending; RV101 logs showed `SIGSEGV` on `signaling_thread` in `libjingle_peerconnection_so.so`. The new lifecycle reuses the pending offer/peer until a remote answer is applied, then permits reconstruction only after a failed/applied negotiation. The rebuilt APK produced one peer creation followed by `reusePendingOffer`; no process death occurred in the validation window. `WebRtcReconnectPolicyTest` covers the policy.
 
 ## Three Modes and Quality
 

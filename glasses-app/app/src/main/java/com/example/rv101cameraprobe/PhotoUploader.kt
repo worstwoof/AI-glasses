@@ -96,7 +96,7 @@ object PhotoUploader {
                 ?.use { it.readText() }
                 .orEmpty()
             val accepted = runCatching { JSONObject(responseBody).optBoolean("accepted") }.getOrDefault(false)
-            if (responseCode == HttpURLConnection.HTTP_CREATED && accepted) {
+            if (isAcceptedResponse(responseCode, accepted)) {
                 UploadResult(true, "Photo uploaded to phone")
             } else {
                 UploadResult(false, "Phone rejected upload (HTTP $responseCode); photo kept locally")
@@ -127,6 +127,9 @@ object PhotoUploader {
     private fun DataOutputStream.writeText(value: String) {
         write(value.toByteArray(Charsets.UTF_8))
     }
+
+    internal fun isAcceptedResponse(responseCode: Int, accepted: Boolean): Boolean =
+        responseCode in 200..299 && accepted
 
     private const val CONNECT_TIMEOUT_MS = 8_000
     private const val READ_TIMEOUT_MS = 30_000

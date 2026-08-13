@@ -100,12 +100,14 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
     _remoteStreamSubscription = _receiver.remoteStreams.listen((stream) {
       unawaited(_attachRemoteStream(stream));
     });
+    _receiver.setAutomaticCapturesAllowed(true);
     unawaited(_receiver.start());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _receiver.setAutomaticCapturesAllowed(false);
     _receiver.setPackagingAnalysisActive(false);
     _receiver.removeListener(_handleReceiverChanged);
     unawaited(_captureSubscription?.cancel());
@@ -119,8 +121,11 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _receiver.setAutomaticCapturesAllowed(true);
       unawaited(_receiver.start());
       unawaited(_receiver.refreshNetworkAddresses());
+    } else {
+      _receiver.setAutomaticCapturesAllowed(false);
     }
   }
 

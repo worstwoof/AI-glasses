@@ -156,9 +156,7 @@ class EatingSessionController {
     final sessionId = _mealSessionId;
     if (sessionId == null) return;
     _captureCoordinator.cancelWhere(
-      (intent) =>
-          intent.mealSessionId == sessionId &&
-          intent.source == CaptureIntentSource.automatic,
+      (intent) => intent.mealSessionId == sessionId && intent.isAutomaticOrigin,
     );
     _pendingScene = 'meal_after';
     _errorMessage = null;

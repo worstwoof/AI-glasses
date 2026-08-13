@@ -76,18 +76,22 @@ class CaptureIntent {
     required this.scene,
     required this.mealSessionId,
     required this.source,
+    CaptureIntentSource? originSource,
     required this.priority,
     required this.delay,
     required this.cooldownGroup,
     required this.qualityPolicy,
     required this.retryPolicy,
-  });
+  }) : originSource = originSource ?? source;
 
   final String taskId;
   final CaptureType captureType;
   final String trigger;
   final String scene;
   final String? mealSessionId;
+
+  /// Preserves the policy that created this task when a retry changes [source].
+  final CaptureIntentSource originSource;
   final CaptureIntentSource source;
   final CapturePriority priority;
   final Duration delay;
@@ -95,9 +99,12 @@ class CaptureIntent {
   final CaptureQualityPolicy qualityPolicy;
   final CaptureRetryPolicy retryPolicy;
 
+  bool get isAutomaticOrigin => originSource == CaptureIntentSource.automatic;
+
   CaptureIntent copyWith({
     String? taskId,
     CaptureIntentSource? source,
+    CaptureIntentSource? originSource,
     Duration? delay,
   }) => CaptureIntent(
     taskId: taskId ?? this.taskId,
@@ -106,6 +113,7 @@ class CaptureIntent {
     scene: scene,
     mealSessionId: mealSessionId,
     source: source ?? this.source,
+    originSource: originSource ?? this.originSource,
     priority: priority,
     delay: delay ?? this.delay,
     cooldownGroup: cooldownGroup,

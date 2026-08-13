@@ -14,6 +14,7 @@ import 'capture_coordinator.dart';
 import 'capture_intent.dart';
 import 'capture_mode_controller.dart';
 import 'capture_quality_evaluator.dart';
+import 'capture_upload_deduplicator.dart';
 import 'eating_session_controller.dart';
 import 'food_scene_classifier.dart';
 import 'packaging_capture_trigger_policy.dart';
@@ -146,6 +147,8 @@ class GlassReceiverService extends ChangeNotifier {
   GlassReceiverService._() {
     _captureCoordinator = CaptureCoordinator(
       dispatch: _dispatchCaptureIntent,
+      isDispatchAllowed: (intent) =>
+          !intent.isAutomaticOrigin || _automaticCapturesAllowed,
       onChanged: _handleCaptureCoordinatorChanged,
     );
     _eatingSessionController = EatingSessionController(
@@ -208,6 +211,7 @@ class GlassReceiverService extends ChangeNotifier {
   int _sceneCandidateHits = 0;
   int _sceneFrameCount = 0;
   final _automaticPackagingCapture = PackagingCaptureTriggerState();
+  final _captureUploadDeduplicator = CaptureUploadDeduplicator();
   final _qualityEvaluator = const CaptureQualityEvaluator();
   final _foodSceneClassifier = const UnavailableFoodSceneClassifier();
   late final CaptureCoordinator _captureCoordinator;
@@ -219,6 +223,7 @@ class GlassReceiverService extends ChangeNotifier {
   GlassCapture? _mealAfterCapture;
   String? _lastAutomaticFoodFingerprint;
   String? _error;
+  bool _automaticCapturesAllowed = true;
 
   Stream<GlassCapture> get captures => _captureController.stream;
 
@@ -229,6 +234,19 @@ class GlassReceiverService extends ChangeNotifier {
 
   void setPackagingAnalysisActive(bool active) {
     _automaticPackagingCapture.analysisActive = active;
+  }
+
+  /// Backgrounding stops future automatic captures without cancelling an image
+  /// that has already been requested from the glasses and is awaiting upload.
+  void setAutomaticCapturesAllowed(bool allowed) {
+    if (_automaticCapturesAllowed == allowed) return;
+    _automaticCapturesAllowed = allowed;
+    if (!allowed) {
+      _captureCoordinator.cancelPendingWhere(
+        (intent) => intent.isAutomaticOrigin,
+      );
+    }
+    notifyListeners();
   }
 
   bool setCaptureMode(CaptureMode mode) {
@@ -444,7 +462,17 @@ class GlassReceiverService extends ChangeNotifier {
     String trigger = 'packaging_button',
     Duration delay = Duration.zero,
     bool allowAutomaticRetake = false,
+    CaptureIntentSource source = CaptureIntentSource.manual,
   }) {
+    if (source == CaptureIntentSource.automatic && !_automaticCapturesAllowed) {
+      return Future<CaptureTaskResult>.value(
+        CaptureTaskResult(
+          taskId: _newCaptureTaskId(),
+          state: CaptureTaskState.dropped,
+          message: '后台期间自动抓拍已暂停',
+        ),
+      );
+    }
     if (_automaticPackagingCapture.analysisActive) {
       return Future<CaptureTaskResult>.value(
         CaptureTaskResult(
@@ -461,8 +489,10 @@ class GlassReceiverService extends ChangeNotifier {
         trigger: trigger,
         scene: 'ingredient_label',
         mealSessionId: null,
-        source: CaptureIntentSource.manual,
-        priority: CapturePriority.explicitUser,
+        source: source,
+        priority: source == CaptureIntentSource.automatic
+            ? CapturePriority.automatic
+            : CapturePriority.explicitUser,
         delay: delay,
         cooldownGroup: CaptureCooldownGroup.packaging,
         qualityPolicy: CaptureQualityPolicy.forScene('ingredient_label'),
@@ -775,65 +805,90 @@ class GlassReceiverService extends ChangeNotifier {
     final metadata = metadataBytes == null
         ? <String, dynamic>{}
         : (jsonDecode(utf8.decode(metadataBytes)) as Map<String, dynamic>);
-    final directory = await getApplicationDocumentsDirectory();
-    final captureDir = Directory(
-      '${directory.path}${Platform.pathSeparator}captures',
-    );
-    await captureDir.create(recursive: true);
-    final id = 'capture_${DateTime.now().millisecondsSinceEpoch}';
-    final imageFile = File(
-      '${captureDir.path}${Platform.pathSeparator}$id.jpg',
-    );
-    await imageFile.writeAsBytes(imageBytes, flush: true);
-
-    final capture = GlassCapture(
-      imageFile: imageFile,
-      metadata: metadata,
-      receivedAt: DateTime.now(),
-    );
-    final activeIntent = _captureCoordinator.activeIntent;
-    final quality = await _evaluateCaptureQuality(
-      imageBytes,
-      metadata,
-      activeIntent,
-    );
-    final acknowledged = _captureCoordinator.acknowledge(
-      CaptureAcknowledgement(
-        taskId: metadata['captureTaskId']?.toString(),
-        captureType: CaptureType.fromWireValue(metadata['type']),
-        scene: metadata['scene']?.toString() ?? 'unknown',
-        mealSessionId: metadata['mealSessionId']?.toString(),
-      ),
-      quality,
-    );
-    if (acknowledged && quality.accepted) {
-      if (metadata['scene']?.toString() == 'meal_before') {
-        _mealBeforeCapture = capture;
-      } else if (metadata['scene']?.toString() == 'meal_during') {
-        _mealDuringCaptures.add(capture);
-      } else if (metadata['scene']?.toString() == 'meal_after') {
-        _mealAfterCapture = capture;
-      }
-      if (activeIntent?.source == CaptureIntentSource.automatic &&
-          activeIntent?.captureType == CaptureType.food) {
-        _lastAutomaticFoodFingerprint = _fingerprint(imageBytes);
-      }
+    final captureTaskId = metadata['captureTaskId']?.toString();
+    final delivery = _captureUploadDeduplicator.begin(captureTaskId);
+    if (delivery != CaptureUploadDisposition.firstDelivery) {
+      await _json(
+        request,
+        delivery == CaptureUploadDisposition.inFlightDuplicate
+            ? HttpStatus.accepted
+            : HttpStatus.ok,
+        {
+          'accepted': true,
+          'duplicate': true,
+          'captureTaskId': captureTaskId,
+          'status': delivery.name,
+        },
+      );
+      return;
     }
-    _lastCapture = capture;
-    _serverMessage = acknowledged
-        ? quality.accepted
-              ? '已收到并确认眼镜抓拍图片'
-              : '已收到眼镜抓拍图片，但质量检查未通过'
-        : '已收到眼镜抓拍图片';
-    _error = null;
-    _captureController.add(capture);
-    notifyListeners();
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final captureDir = Directory(
+        '${directory.path}${Platform.pathSeparator}captures',
+      );
+      await captureDir.create(recursive: true);
+      final id = 'capture_${DateTime.now().millisecondsSinceEpoch}';
+      final imageFile = File(
+        '${captureDir.path}${Platform.pathSeparator}$id.jpg',
+      );
+      await imageFile.writeAsBytes(imageBytes, flush: true);
 
-    await _json(request, HttpStatus.created, {
-      'accepted': true,
-      'captureId': id,
-      'status': 'received',
-    });
+      final capture = GlassCapture(
+        imageFile: imageFile,
+        metadata: metadata,
+        receivedAt: DateTime.now(),
+      );
+      final activeIntent = _captureCoordinator.activeIntent;
+      final quality = await _evaluateCaptureQuality(
+        imageBytes,
+        metadata,
+        activeIntent,
+      );
+      final acknowledged = _captureCoordinator.acknowledge(
+        CaptureAcknowledgement(
+          taskId: captureTaskId,
+          captureType: CaptureType.fromWireValue(metadata['type']),
+          scene: metadata['scene']?.toString() ?? 'unknown',
+          mealSessionId: metadata['mealSessionId']?.toString(),
+        ),
+        quality,
+      );
+      if (acknowledged && quality.accepted) {
+        if (metadata['scene']?.toString() == 'meal_before') {
+          _mealBeforeCapture = capture;
+        } else if (metadata['scene']?.toString() == 'meal_during') {
+          _mealDuringCaptures.add(capture);
+        } else if (metadata['scene']?.toString() == 'meal_after') {
+          _mealAfterCapture = capture;
+        }
+        if (activeIntent?.isAutomaticOrigin == true &&
+            activeIntent?.captureType == CaptureType.food) {
+          _lastAutomaticFoodFingerprint = _fingerprint(imageBytes);
+        }
+      }
+      _lastCapture = capture;
+      _serverMessage = acknowledged
+          ? quality.accepted
+                ? '已收到并确认眼镜抓拍图片'
+                : '已收到眼镜抓拍图片，但质量检查未通过'
+          : '已收到眼镜抓拍图片';
+      _error = null;
+      _captureController.add(capture);
+      notifyListeners();
+
+      // Commit after all side effects, before response I/O, so a disconnected
+      // client cannot replay an already processed upload.
+      _captureUploadDeduplicator.complete(captureTaskId);
+      await _json(request, HttpStatus.created, {
+        'accepted': true,
+        'captureId': id,
+        'status': 'received',
+      });
+    } catch (_) {
+      _captureUploadDeduplicator.fail(captureTaskId);
+      rethrow;
+    }
   }
 
   Future<CaptureQualityResult> _evaluateCaptureQuality(
@@ -845,7 +900,7 @@ class GlassReceiverService extends ChangeNotifier {
     final metrics = await _measureCaptureImage(imageBytes);
     final fingerprint = _fingerprint(imageBytes);
     final isAutomaticFood =
-        activeIntent.source == CaptureIntentSource.automatic &&
+        activeIntent.isAutomaticOrigin &&
         activeIntent.captureType == CaptureType.food;
     return _qualityEvaluator.evaluate(
       CaptureQualityInput(
@@ -1069,6 +1124,7 @@ class GlassReceiverService extends ChangeNotifier {
     _sceneCandidateHits = 0;
     _sceneCandidateMode = PhoneSceneMode.waiting;
     if (_eatingSessionController.state == EatingSessionState.idle &&
+        _automaticCapturesAllowed &&
         previousMode != PhoneSceneMode.ingredientLabel &&
         _automaticPackagingCapture.tryStart(DateTime.now())) {
       unawaited(_sendAutomaticPackagingCapture());
@@ -1082,6 +1138,7 @@ class GlassReceiverService extends ChangeNotifier {
         trigger: 'phone_ok_gesture',
         delay: const Duration(seconds: 2),
         allowAutomaticRetake: true,
+        source: CaptureIntentSource.automatic,
       );
       sent = result.accepted;
     } finally {
