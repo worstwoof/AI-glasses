@@ -25,6 +25,8 @@
 3. 执行 `flutter pub get`
 4. 连接 Android 模拟器或真机后运行
 
+App 启动后会自动启动手机端接收服务，默认监听 `8080` 端口。食物存在度接口不需要额外启动 Python 服务。
+
 ## 已新增能力
 
 - 支持浅色模式，默认使用浅色模式
@@ -34,6 +36,7 @@
 - 识别页支持 RV101 局域网 WebRTC 实时预览
 - 可接收 RV101 上传的高清 JPEG 抓拍，并继续走原 AI 识图与饮食记录写回流程
 - 手机 APK 内置 MediaPipe Hand Landmarker，使用眼镜低频预览帧做粗场景分类
+- 手机 APK 内置 MobileNetV3-Small 食物存在度模型，使用眼镜低频预览帧返回 `foodProbability`
 
 ## RV101 实时预览
 
@@ -57,7 +60,7 @@
 
 实时预览只做局域网连接，不配置 TURN/STUN。眼镜端不再运行水果识别或手势模型，只负责 Camera2、WebRTC、低频分类帧和高清 JPEG 抓拍。
 
-## 手机端粗场景分类
+## 手机端低频图像接口
 
 眼镜会把约每秒一帧的低清 JPEG 发送到手机：
 
@@ -66,13 +69,39 @@ POST http://<手机IP>:8080/api/v1/scene/frames
 X-Device-Token: <配对令牌>
 ```
 
-手机 App 在 Android 原生层运行本地 MediaPipe 模型，连续两帧确认后切换粗场景：
+手机 App 在 Android 原生层运行本地 MobileNetV3-Small 模型，直接返回图片中存在食物的概率。
+旧版 MediaPipe Hand Landmarker 手势分类实现仍保留在 Android 通道中，供兼容旧页面状态使用，
+但不再由这个低频图片接口调用。高清 JPEG 仍由手机端“眼镜抓拍”按钮触发，后续再接入配料表 OCR 或餐食 AI 分析。
 
-- OK 手势：`ingredient_label`，进入“配料表识别模式”准备状态。
-- 张开手掌：`eating`，进入“进餐环境/无感记录”准备状态。
-- 其他画面：`unknown`，保持等待。
+## 手机端食物存在度识别
 
-当前版本只做粗分类和页面状态提示，不会自动调用 OCR、自动计算热量或直接写入饮食记录。高清 JPEG 仍由手机端“眼镜抓拍”按钮触发，后续再根据场景模式接入配料表 OCR 或餐食 AI 分析。
+`POST /api/v1/scene/frames` 接收眼镜端的单张 JPEG 后，手机端 Android 原生模型返回：
+
+```json
+{
+  "accepted": true,
+  "status": "classified",
+  "foodProbability": 0.91
+}
+```
+
+模型输入为保持宽高比缩放并 padding 到 `224x224` 的 RGB 图片。模型文件为
+`android/app/src/main/assets/food_presence.tflite`，输出顺序实际为
+`[healthy, not_food, unhealthy]`，因此 `foodProbability` 等于第 0 和第 2 项之和。
+模型来源、SHA-256 和许可证记录在 `FOOD_PRESENCE_MODEL.md`。
+
+可用电脑上的 `curl.exe` 直接联调：
+
+```powershell
+$phoneIp = '手机局域网 IP'
+$token = 'CsF8V6pEOWqlfcktClawh60N'
+$image = 'C:\path\to\food.jpg'
+curl.exe -X POST "http://${phoneIp}:8080/api/v1/scene/frames" `
+  -H "X-Device-Token: $token" `
+  -F "image=@$image;type=image/jpeg"
+```
+
+成功响应中的 `foodProbability` 是 `0.0` 到 `1.0` 的食物存在度。
 
 ## AI 识图配置
 

@@ -8,6 +8,7 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     private val classifierExecutor = Executors.newSingleThreadExecutor()
     private var sceneClassifier: PhoneSceneClassifier? = null
+    private var foodPresenceClassifier: FoodPresenceClassifier? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -37,10 +38,33 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "predictFoodProbability" -> {
+                    val bytes = call.arguments as? ByteArray
+                    if (bytes == null || bytes.isEmpty()) {
+                        result.error("invalid_frame", "JPEG bytes are empty", null)
+                        return@setMethodCallHandler
+                    }
+                    classifierExecutor.execute {
+                        try {
+                            val probability = foodClassifier().predictFoodProbability(bytes)
+                            runOnUiThread { result.success(probability) }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.error(
+                                    "food_classification_failed",
+                                    error.message ?: error.javaClass.simpleName,
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
                 "reset" -> {
                     classifierExecutor.execute {
                         sceneClassifier?.close()
                         sceneClassifier = null
+                        foodPresenceClassifier?.close()
+                        foodPresenceClassifier = null
                         runOnUiThread { result.success(true) }
                     }
                 }
@@ -51,6 +75,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         sceneClassifier?.close()
+        foodPresenceClassifier?.close()
         classifierExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -58,5 +83,10 @@ class MainActivity : FlutterActivity() {
     private fun classifier(): PhoneSceneClassifier =
         sceneClassifier ?: PhoneSceneClassifier(applicationContext).also {
             sceneClassifier = it
+        }
+
+    private fun foodClassifier(): FoodPresenceClassifier =
+        foodPresenceClassifier ?: FoodPresenceClassifier(applicationContext).also {
+            foodPresenceClassifier = it
         }
 }

@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'app_shell_pro.dart';
 import 'app_theme.dart';
+import 'services/glass_receiver_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await WebRTC.initialize(options: const {'disableNetworkMonitor': true});
+  unawaited(GlassReceiverService.instance.start());
   runApp(const AiGlassesNutritionApp());
 }
 

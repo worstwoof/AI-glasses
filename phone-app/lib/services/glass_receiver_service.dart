@@ -8,6 +8,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'food_presence_classifier.dart';
 import 'phone_scene_classifier.dart';
 
 class GlassCapture {
@@ -42,6 +43,7 @@ class GlassReceiverSnapshot {
     required this.glassesMessage,
     required this.glassesIp,
     required this.sceneClassification,
+    required this.foodProbability,
     required this.sceneFrameCount,
     required this.lastCapture,
     required this.error,
@@ -61,6 +63,7 @@ class GlassReceiverSnapshot {
   final String glassesMessage;
   final String? glassesIp;
   final PhoneSceneClassification sceneClassification;
+  final double? foodProbability;
   final int sceneFrameCount;
   final GlassCapture? lastCapture;
   final String? error;
@@ -141,6 +144,7 @@ class GlassReceiverService extends ChangeNotifier {
   String? _glassesIp;
   PhoneSceneClassification _sceneClassification =
       PhoneSceneClassification.waiting;
+  double? _foodProbability;
   PhoneSceneMode _sceneCandidateMode = PhoneSceneMode.waiting;
   int _sceneCandidateHits = 0;
   int _sceneFrameCount = 0;
@@ -166,6 +170,7 @@ class GlassReceiverService extends ChangeNotifier {
     glassesMessage: _glassesMessage,
     glassesIp: _glassesIp,
     sceneClassification: _sceneClassification,
+    foodProbability: _foodProbability,
     sceneFrameCount: _sceneFrameCount,
     lastCapture: _lastCapture,
     error: _error,
@@ -675,18 +680,15 @@ class GlassReceiverService extends ChangeNotifier {
         return;
       }
 
-      final raw = await PhoneSceneClassifier.classifyJpeg(imageBytes);
+      final foodProbability =
+          await FoodPresenceClassifier.predictFoodProbability(imageBytes);
+      _foodProbability = foodProbability;
       _sceneFrameCount += 1;
-      _applySceneClassification(raw);
       notifyListeners();
       await _json(request, HttpStatus.ok, {
         'accepted': true,
         'status': 'classified',
-        'scene': raw.mode.name,
-        'gesture': raw.gesture,
-        'confidence': raw.confidence,
-        'stableScene': _sceneClassification.mode.name,
-        'candidateHits': _sceneCandidateHits,
+        'foodProbability': foodProbability,
       });
     } finally {
       _classifyingSceneFrame = false;
