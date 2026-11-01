@@ -5,7 +5,14 @@ import '../packaging_models.dart';
 import 'capture_coordinator.dart';
 import 'capture_intent.dart';
 
-enum EatingSessionState { idle, starting, eating, ending }
+enum EatingSessionState {
+  idle,
+  starting,
+  eating,
+  afterCandidateCapturing,
+  afterCandidateReady,
+  ending,
+}
 
 class EatingSessionSnapshot {
   const EatingSessionSnapshot({
@@ -30,8 +37,9 @@ class EatingSessionSnapshot {
 typedef SessionIdGenerator = String Function();
 typedef SessionTaskIdGenerator = String Function();
 
-/// Owns only the gesture-driven meal state machine. Physical capture timing,
-/// acknowledgement matching, retry, and cancellation belong to [CaptureCoordinator].
+/// Owns the meal state machine for both explicit gestures and automatic
+/// candidates. Physical capture timing, acknowledgement matching, retry, and
+/// cancellation belong to [CaptureCoordinator].
 class EatingSessionController {
   EatingSessionController({
     required CaptureCoordinator captureCoordinator,
@@ -102,10 +110,102 @@ class EatingSessionController {
         } else {
           _fistHits = 0;
         }
+      case EatingSessionState.afterCandidateReady:
+        _openPalmHits = 0;
+        if (normalized == 'fist') {
+          _fistHits += 1;
+          _log(
+            '[Gesture] FIST $_fistHits/$requiredGestureHits confirm candidate',
+          );
+          if (_fistHits >= requiredGestureHits) confirmMealAfterCandidate();
+        } else {
+          _fistHits = 0;
+        }
+      case EatingSessionState.afterCandidateCapturing:
+        _openPalmHits = 0;
+        if (normalized == 'fist') {
+          _fistHits += 1;
+          _log(
+            '[Gesture] FIST $_fistHits/$requiredGestureHits overrides candidate',
+          );
+          if (_fistHits >= requiredGestureHits) _beginEnding();
+        } else {
+          _fistHits = 0;
+        }
       case EatingSessionState.ending:
         _openPalmHits = 0;
         _fistHits = 0;
     }
+  }
+
+  /// Starts a meal from a stable automatic food candidate.
+  Future<CaptureTaskResult?> startAutomaticSession() async {
+    if (_state != EatingSessionState.idle || _disposed) return null;
+    _beginSession(
+      source: CaptureIntentSource.automatic,
+      trigger: 'auto_food_scene',
+    );
+    final result = _pendingResult;
+    return result == null ? null : await result;
+  }
+
+  /// Requests an automatic post-meal candidate without closing the session.
+  Future<CaptureTaskResult?> requestAutomaticAfterCandidate() async {
+    if (_state != EatingSessionState.eating || _disposed) return null;
+    _pendingScene = 'meal_after_candidate';
+    _errorMessage = null;
+    _state = EatingSessionState.afterCandidateCapturing;
+    _emit();
+    final result = await _submitMealCapture(
+      scene: 'meal_after_candidate',
+      trigger: 'auto_meal_end_candidate',
+      source: CaptureIntentSource.automatic,
+      priority: CapturePriority.automatic,
+      cooldownGroup: CaptureCooldownGroup.automaticFood,
+    );
+    if (_disposed || _state != EatingSessionState.afterCandidateCapturing) {
+      return result;
+    }
+    if (result?.accepted == true) {
+      _state = EatingSessionState.afterCandidateReady;
+      _pendingScene = 'meal_after_candidate';
+      _pendingTaskId = null;
+      _emit();
+    } else {
+      _state = EatingSessionState.eating;
+      _pendingScene = null;
+      _pendingTaskId = null;
+      _errorMessage = '餐后候选抓拍失败，请继续进食或手动结束';
+      _emit();
+    }
+    return result;
+  }
+
+  /// Promotes a previously accepted candidate without taking another photo.
+  void confirmMealAfterCandidate() {
+    if (_state != EatingSessionState.afterCandidateReady) return;
+    final sessionId = _mealSessionId;
+    if (sessionId == null) return;
+    _operationToken += 1;
+    _pendingScene = null;
+    _pendingTaskId = null;
+    _lastCompletedSessionId = sessionId;
+    _mealSessionId = null;
+    _state = EatingSessionState.idle;
+    _fistHits = 0;
+    _openPalmHits = 0;
+    _errorMessage = null;
+    _emit();
+  }
+
+  void cancelMealAfterCandidate() {
+    if (_state != EatingSessionState.afterCandidateReady) return;
+    _pendingScene = null;
+    _pendingTaskId = null;
+    _state = EatingSessionState.eating;
+    _fistHits = 0;
+    _errorMessage = null;
+    _emit();
   }
 
   /// Cancels queued, delayed, or awaiting-ACK meal tasks and ignores late ACKs.
@@ -127,7 +227,8 @@ class EatingSessionController {
   }
 
   void onConnectionLost() {
-    if (_state == EatingSessionState.starting) {
+    if (_state == EatingSessionState.starting ||
+        _state == EatingSessionState.afterCandidateCapturing) {
       _failPendingCapture('connection lost during meal start');
     } else if (_state == EatingSessionState.ending) {
       _failPendingCapture('connection lost during meal end');
@@ -139,7 +240,12 @@ class EatingSessionController {
     _operationToken += 1;
   }
 
-  void _beginSession() {
+  Future<CaptureTaskResult?>? _pendingResult;
+
+  void _beginSession({
+    CaptureIntentSource source = CaptureIntentSource.mealControl,
+    String trigger = 'meal_start',
+  }) {
     _openPalmHits = 0;
     _fistHits = 0;
     _mealSessionId = _sessionIdGenerator();
@@ -148,14 +254,27 @@ class EatingSessionController {
     _state = EatingSessionState.starting;
     _log('[EatingSession] IDLE -> STARTING session=$_mealSessionId');
     _emit();
-    _submitMealCapture(scene: 'meal_before', trigger: 'meal_start');
+    _pendingResult = _submitMealCapture(
+      scene: 'meal_before',
+      trigger: trigger,
+      source: source,
+      priority: source == CaptureIntentSource.automatic
+          ? CapturePriority.automatic
+          : CapturePriority.mealControl,
+      cooldownGroup: source == CaptureIntentSource.automatic
+          ? CaptureCooldownGroup.automaticFood
+          : CaptureCooldownGroup.none,
+    );
   }
 
   void _beginEnding() {
     _fistHits = 0;
     final sessionId = _mealSessionId;
     if (sessionId == null) return;
-    _captureCoordinator.cancelWhere(
+    // A command already sent to the glasses must be allowed to finish. The
+    // coordinator will then dispatch the critical meal-after task; queued or
+    // delayed automatic work is cancelled immediately.
+    _captureCoordinator.cancelPendingWhere(
       (intent) => intent.mealSessionId == sessionId && intent.isAutomaticOrigin,
     );
     _pendingScene = 'meal_after';
@@ -163,47 +282,61 @@ class EatingSessionController {
     _state = EatingSessionState.ending;
     _log('[EatingSession] EATING -> ENDING session=$sessionId');
     _emit();
-    _submitMealCapture(scene: 'meal_after', trigger: 'meal_end');
+    _pendingResult = _submitMealCapture(
+      scene: 'meal_after',
+      trigger: 'meal_end',
+      source: CaptureIntentSource.mealControl,
+      priority: CapturePriority.critical,
+      cooldownGroup: CaptureCooldownGroup.none,
+    );
   }
 
-  void _submitMealCapture({required String scene, required String trigger}) {
+  Future<CaptureTaskResult?> _submitMealCapture({
+    required String scene,
+    required String trigger,
+    required CaptureIntentSource source,
+    required CapturePriority priority,
+    required CaptureCooldownGroup cooldownGroup,
+  }) async {
     final sessionId = _mealSessionId;
-    if (_disposed || sessionId == null) return;
+    if (_disposed || sessionId == null) return null;
     final taskId = _taskIdGenerator();
     final token = ++_operationToken;
     _pendingTaskId = taskId;
     _log('[MealCapture] $scene submitted task=$taskId session=$sessionId');
+    final resultFuture = _captureCoordinator.submit(
+      CaptureIntent(
+        taskId: taskId,
+        captureType: CaptureType.food,
+        trigger: trigger,
+        scene: scene,
+        mealSessionId: sessionId,
+        source: source,
+        priority: priority,
+        delay: settleDelay,
+        cooldownGroup: cooldownGroup,
+        qualityPolicy: CaptureQualityPolicy.forScene(scene),
+        retryPolicy: _mealRetakePolicy,
+      ),
+    );
     unawaited(
       _awaitCaptureResult(
         token: token,
         expectedScene: scene,
         sessionId: sessionId,
-        intent: CaptureIntent(
-          taskId: taskId,
-          captureType: CaptureType.food,
-          trigger: trigger,
-          scene: scene,
-          mealSessionId: sessionId,
-          source: CaptureIntentSource.mealControl,
-          priority: scene == 'meal_after'
-              ? CapturePriority.critical
-              : CapturePriority.mealControl,
-          delay: settleDelay,
-          cooldownGroup: CaptureCooldownGroup.none,
-          qualityPolicy: CaptureQualityPolicy.forScene(scene),
-          retryPolicy: _mealRetakePolicy,
-        ),
+        resultFuture: resultFuture,
       ),
     );
+    return resultFuture;
   }
 
   Future<void> _awaitCaptureResult({
     required int token,
     required String expectedScene,
     required String sessionId,
-    required CaptureIntent intent,
+    required Future<CaptureTaskResult> resultFuture,
   }) async {
-    final result = await _captureCoordinator.submit(intent);
+    final result = await resultFuture;
     if (_disposed ||
         token != _operationToken ||
         _pendingScene != expectedScene ||
@@ -212,7 +345,7 @@ class EatingSessionController {
     }
     if (!result.accepted) {
       _failPendingCapture(
-        '${intent.trigger} ${result.state.name}: ${result.message ?? 'capture failed'}',
+        '$expectedScene ${result.state.name}: ${result.message ?? 'capture failed'}',
       );
       return;
     }
@@ -224,6 +357,9 @@ class EatingSessionController {
     if (expectedScene == 'meal_before') {
       _state = EatingSessionState.eating;
       _fistHits = 0;
+    } else if (expectedScene == 'meal_after_candidate') {
+      _state = EatingSessionState.afterCandidateReady;
+      _pendingScene = expectedScene;
     } else {
       _state = EatingSessionState.idle;
       _lastCompletedSessionId = sessionId;
@@ -246,10 +382,19 @@ class EatingSessionController {
       );
     }
     final wasEnding = _state == EatingSessionState.ending;
+    final wasCandidate =
+        _state == EatingSessionState.afterCandidateCapturing ||
+        pendingScene == 'meal_after_candidate';
     _pendingScene = null;
     _pendingTaskId = null;
-    _state = wasEnding ? EatingSessionState.eating : EatingSessionState.idle;
-    _errorMessage = wasEnding ? '餐后抓拍失败，请再次握拳结束' : '餐前抓拍失败，请重新张手开始';
+    _state = wasEnding || wasCandidate
+        ? EatingSessionState.eating
+        : EatingSessionState.idle;
+    _errorMessage = wasCandidate
+        ? '餐后候选抓拍失败，请继续进食或手动结束'
+        : wasEnding
+        ? '餐后抓拍失败，请再次握拳结束'
+        : '餐前抓拍失败，请重新张手开始';
     _log('[MealCapture] failed reason=$message session=$sessionId');
     _openPalmHits = 0;
     _fistHits = 0;

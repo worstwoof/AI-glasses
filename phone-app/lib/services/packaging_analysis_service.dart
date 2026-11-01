@@ -40,7 +40,7 @@ class PackagingAnalysisService {
     return analyzeText(
       rawText: rawText,
       profile: profile,
-      analysisSource: PackagingAnalysisSource.vivoOcrDeterministic,
+      analysisSource: PackagingAnalysisSource.qwenVisionOcrDeterministic,
     );
   }
 
@@ -55,6 +55,7 @@ class PackagingAnalysisService {
       throw const PackagingAnalysisException('OCR 原文为空。');
     }
     final ingredients = _extractIngredients(normalized);
+    final productName = _extractProductName(normalized);
     final nutrition = parser.parse(normalized);
     final evaluation = riskEngine.evaluate(
       nutrition: nutrition,
@@ -70,6 +71,7 @@ class PackagingAnalysisService {
       risks: evaluation.risks,
       suggestions: evaluation.suggestions,
       analysisSource: analysisSource,
+      productName: productName,
     );
   }
 
@@ -97,6 +99,7 @@ class PackagingAnalysisService {
       risks: evaluation.risks,
       suggestions: evaluation.suggestions,
       analysisSource: previous.analysisSource,
+      productName: previous.productName,
     );
   }
 
@@ -119,6 +122,25 @@ class PackagingAnalysisService {
         .where((item) => item.isNotEmpty && item.length <= 32)
         .take(40)
         .toList(growable: false);
+  }
+
+  String _extractProductName(String text) {
+    final labeled = RegExp(
+      r'(?:品名|商品名称|产品名称)\s*[:：]?\s*([^\r\n，,;；]{1,32})',
+    ).firstMatch(text);
+    final candidate = labeled?.group(1)?.trim();
+    if (candidate != null && candidate.isNotEmpty) return candidate;
+
+    for (final line in text.split(RegExp(r'[\r\n]+'))) {
+      final normalized = line.trim();
+      if (normalized.isEmpty ||
+          RegExp(r'^(配料表|营养成分表|营养标签|净含量|规格)').hasMatch(normalized)) {
+        continue;
+      }
+      final compact = normalized.replaceAll(RegExp(r'\s+'), ' ');
+      return compact.length <= 32 ? compact : compact.substring(0, 32);
+    }
+    return '未识别商品';
   }
 }
 

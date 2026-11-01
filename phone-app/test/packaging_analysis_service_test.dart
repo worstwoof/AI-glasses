@@ -31,6 +31,22 @@ class _FakeOcr extends IngredientLabelServiceV2Adapter {
 void main() {
   const service = PackagingAnalysisService();
 
+  test('explicit product name wins over the first OCR line', () {
+    final result = service.analyzeText(
+      rawText: '广告文字\n产品名称：花生饼干\n配料表：花生',
+      profile: _profile,
+    );
+    expect(result.productName, '花生饼干');
+  });
+
+  test('empty OCR is an error rather than a risk conclusion', () async {
+    const service = PackagingAnalysisService(ocr: _FakeOcr('  '));
+    await expectLater(
+      service.analyzeImage(image: XFile('label.jpg'), profile: _profile),
+      throwsA(isA<PackagingAnalysisException>()),
+    );
+  });
+
   test('combines OCR text, nutrition parsing, and profile risks', () {
     final result = service.analyzeText(
       rawText: '''
@@ -72,6 +88,9 @@ void main() {
       profile: _profile,
     );
 
-    expect(result.analysisSource, PackagingAnalysisSource.vivoOcrDeterministic);
+    expect(
+      result.analysisSource,
+      PackagingAnalysisSource.qwenVisionOcrDeterministic,
+    );
   });
 }

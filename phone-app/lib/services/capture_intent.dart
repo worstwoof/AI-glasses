@@ -48,6 +48,13 @@ class CaptureQualityPolicy {
           checkDuplicate: false,
           allowsRetake: true,
         );
+      case 'meal_after_candidate':
+        return const CaptureQualityPolicy(
+          requireHighResolution: true,
+          requireFoodRelevance: false,
+          checkDuplicate: false,
+          allowsRetake: true,
+        );
       case 'meal_during':
         return const CaptureQualityPolicy(
           requireHighResolution: false,

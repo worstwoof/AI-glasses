@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../demo_data.dart';
+import '../health_chat_models.dart';
 import '../models.dart';
 import '../packaging_models.dart';
 
@@ -28,6 +29,7 @@ class LocalStorageService {
   static const String _isConnectedKey = 'local_is_connected';
   static const String _lastAnalysisKey = 'local_last_analysis';
   static const String _packagingScansKey = 'local_packaging_scans';
+  static const String _healthChatMessagesKey = 'local_health_chat_messages';
 
   static final SharedPreferencesAsync _prefs = SharedPreferencesAsync();
 
@@ -106,6 +108,37 @@ class LocalStorageService {
 
   static Future<void> saveLastAnalysis(AnalysisResult analysis) {
     return _prefs.setString(_lastAnalysisKey, jsonEncode(analysis.toMap()));
+  }
+
+  static Future<List<HealthChatMessage>> loadHealthChatMessages() async {
+    final raw = await _prefs.getString(_healthChatMessagesKey);
+    if (raw == null || raw.trim().isEmpty) return <HealthChatMessage>[];
+    try {
+      final decoded = jsonDecode(raw) as List<dynamic>;
+      return decoded
+          .whereType<Map>()
+          .map(
+            (item) =>
+                HealthChatMessage.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .toList(growable: true);
+    } catch (_) {
+      return <HealthChatMessage>[];
+    }
+  }
+
+  static Future<void> saveHealthChatMessages(List<HealthChatMessage> messages) {
+    final recent = messages.length > 50
+        ? messages.sublist(messages.length - 50)
+        : messages;
+    return _prefs.setString(
+      _healthChatMessagesKey,
+      jsonEncode(recent.map((message) => message.toMap()).toList()),
+    );
+  }
+
+  static Future<void> clearHealthChatMessages() {
+    return _prefs.remove(_healthChatMessagesKey);
   }
 
   static Future<List<PackagingScanRecord>> loadPackagingScans() async {

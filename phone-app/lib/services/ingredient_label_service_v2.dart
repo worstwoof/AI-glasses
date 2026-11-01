@@ -1,16 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:image_picker/image_picker.dart';
 
 import '../models.dart';
+import 'ai_provider_config.dart';
 
 class LabelRiskItem {
-  const LabelRiskItem({
-    required this.name,
-    required this.reason,
-  });
+  const LabelRiskItem({required this.name, required this.reason});
 
   final String name;
   final String reason;
@@ -39,30 +36,14 @@ class IngredientLabelAnalysisResult {
 class IngredientLabelServiceV2 {
   IngredientLabelServiceV2._();
 
-  static const String appId = String.fromEnvironment(
-    'AI_APP_ID',
-    defaultValue: '2026209917',
-  );
-  static const String apiKey = String.fromEnvironment('AI_API_KEY');
-
-  static const String textModel = String.fromEnvironment(
-    'AI_TEXT_MODEL',
-    defaultValue: 'Doubao-Seed-2.0-mini',
-  );
-  static const String chatApiUrl = String.fromEnvironment(
-    'AI_API_URL',
-    defaultValue: 'https://api-ai.vivo.com.cn/v1/chat/completions',
-  );
-  static const String ocrApiUrl = String.fromEnvironment(
-    'AI_OCR_URL',
-    defaultValue: 'http://api-ai.vivo.com.cn/ocr/general_recognition',
-  );
+  static const String apiKey = AiProviderConfig.apiKey;
+  static const String textModel = AiProviderConfig.textModel;
+  static const String ocrModel = AiProviderConfig.ocrModel;
+  static String get chatApiUrl => AiProviderConfig.chatCompletionsUrl;
 
   static String get effectiveApiKey => apiKey.trim();
 
   static bool get aiConfigured => effectiveApiKey.isNotEmpty;
-  static String get businessId => 'aigc$appId';
-
   static Future<IngredientLabelAnalysisResult> analyzeLabel({
     required XFile image,
     required AppUserProfile profile,
@@ -86,75 +67,63 @@ class IngredientLabelServiceV2 {
 
   static Future<String> recognizeText(XFile image) async {
     final bytes = await image.readAsBytes();
-    final requestId = _requestId();
-    final uri = Uri.parse(ocrApiUrl).replace(
-      queryParameters: <String, String>{'requestId': requestId},
-    );
-    final body = Uri(
-      queryParameters: <String, String>{
-        'image': base64Encode(bytes),
-        'pos': '0',
-        'businessid': businessId,
-        'sessid': requestId,
-      },
-    ).query;
+    final uri = Uri.parse(chatApiUrl);
+    final base64Image = base64Encode(bytes);
+    final mimeType = image.mimeType ?? 'image/jpeg';
+    final payload = <String, dynamic>{
+      'model': ocrModel,
+      'temperature': 0.1,
+      'max_tokens': 1800,
+      'stream': false,
+      'messages': [
+        {
+          'role': 'system',
+          'content':
+              '你是中文食品包装 OCR 助手。请完整读取图片中清晰可见的文字，重点提取配料表、营养成分表、过敏原提示、净含量、规格和产品名称。'
+              '按图片中的阅读顺序输出纯文本，每个区块单独一行。不要补写图片中看不清或不存在的内容。'
+              '如果图片中没有可读文字，只返回空字符串。',
+        },
+        {
+          'role': 'user',
+          'content': [
+            {'type': 'text', 'text': '请识别这张食品包装图片中的文字，保留数字、单位、百分号和中文标点。'},
+            {
+              'type': 'image_url',
+              'image_url': {'url': 'data:$mimeType;base64,$base64Image'},
+            },
+          ],
+        },
+      ],
+    };
 
     final client = HttpClient();
     try {
       final request = await client.postUrl(uri);
       request.headers.set(
         HttpHeaders.contentTypeHeader,
-        'application/x-www-form-urlencoded',
+        'application/json; charset=utf-8',
       );
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $effectiveApiKey');
-      request.write(body);
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer $effectiveApiKey',
+      );
+      request.write(jsonEncode(payload));
 
       final response = await request.close();
-      final payload = await response.transform(utf8.decoder).join();
+      final responseBody = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw IngredientLabelException(
-          'OCR 调用失败，HTTP ${response.statusCode}。响应片段：${_clip(payload)}',
+          'OCR 调用失败，HTTP ${response.statusCode}。响应片段：${_clip(responseBody)}',
         );
       }
 
-      final decoded = jsonDecode(payload) as Map<String, dynamic>;
-      final errorCode = decoded['error_code'];
-      if (errorCode is num && errorCode != 0) {
-        final message = decoded['error_msg']?.toString() ?? '未知错误';
+      final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
+      final apiError = decoded['error'];
+      if (apiError is Map<String, dynamic>) {
+        final message = apiError['message']?.toString() ?? '未知错误';
         throw IngredientLabelException('OCR 识别失败：$message');
       }
-
-      final result = decoded['result'];
-      if (result is! Map<String, dynamic>) {
-        throw const IngredientLabelException('OCR 返回结果缺少 result 字段。');
-      }
-
-      final words = <String>[];
-      final wordsList = result['words'];
-      if (wordsList is List) {
-        for (final item in wordsList) {
-          if (item is Map<String, dynamic>) {
-            final word = item['words']?.toString().trim() ?? '';
-            if (word.isNotEmpty) {
-              words.add(word);
-            }
-          }
-        }
-      }
-
-      final ocrBlocks = result['OCR'];
-      if (ocrBlocks is List) {
-        for (final item in ocrBlocks) {
-          if (item is Map<String, dynamic>) {
-            final word = item['words']?.toString().trim() ?? '';
-            if (word.isNotEmpty) {
-              words.add(word);
-            }
-          }
-        }
-      }
-
-      return words.join('\n').trim();
+      return _extractContent(decoded, responseBody).trim();
     } on SocketException catch (error) {
       throw IngredientLabelException('OCR 网络连接失败：$error');
     } on FormatException catch (error) {
@@ -168,16 +137,12 @@ class IngredientLabelServiceV2 {
     String text,
     AppUserProfile profile,
   ) async {
-    final requestId = _requestId();
-    final uri = Uri.parse(chatApiUrl).replace(
-      queryParameters: <String, String>{'request_id': requestId},
-    );
+    final uri = Uri.parse(chatApiUrl);
 
     final payload = <String, dynamic>{
       'model': textModel,
       'temperature': 0.1,
       'max_tokens': 900,
-      'reasoning_effort': 'minimal',
       'stream': false,
       'messages': [
         {
@@ -210,7 +175,10 @@ class IngredientLabelServiceV2 {
         HttpHeaders.contentTypeHeader,
         'application/json; charset=utf-8',
       );
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $effectiveApiKey');
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer $effectiveApiKey',
+      );
       request.write(jsonEncode(payload));
 
       final response = await request.close();
@@ -308,10 +276,8 @@ class IngredientLabelServiceV2 {
     final suggestions = <String>[
       if (matchedUserAllergies.isNotEmpty)
         '检测到与你档案中过敏项相关的成分：${matchedUserAllergies.join("、")}，建议直接避免食用。',
-      if (caution.isNotEmpty)
-        '识别到 ${caution.first.name} 等需要留意的成分，建议控制食用频率和份量。',
-      if (ingredients.length > 12)
-        '配料项较多，通常代表加工度较高，可优先选择配料更短、更简单的替代品。',
+      if (caution.isNotEmpty) '识别到 ${caution.first.name} 等需要留意的成分，建议控制食用频率和份量。',
+      if (ingredients.length > 12) '配料项较多，通常代表加工度较高，可优先选择配料更短、更简单的替代品。',
       '建议继续结合营养成分表里的钠、糖和反式脂肪信息一起判断。',
     ];
 
@@ -357,7 +323,9 @@ class IngredientLabelServiceV2 {
               allergens: allergens,
               cautionIngredients: caution,
             ),
-      ingredients: ingredients.isEmpty ? _extractIngredients(rawText) : ingredients,
+      ingredients: ingredients.isEmpty
+          ? _extractIngredients(rawText)
+          : ingredients,
       allergens: allergens,
       cautionIngredients: caution,
       suggestions: suggestions.isEmpty
@@ -372,28 +340,28 @@ class IngredientLabelServiceV2 {
       return const [];
     }
 
-    return value.map<LabelRiskItem?>((item) {
-      if (item is Map<String, dynamic>) {
-        final name = item['name']?.toString().trim() ?? '';
-        final reason = item['reason']?.toString().trim() ?? '';
-        if (name.isEmpty && reason.isEmpty) {
-          return null;
-        }
-        return LabelRiskItem(
-          name: name.isEmpty ? '需留意成分' : name,
-          reason: reason.isEmpty ? '建议结合食用频率和个人情况综合判断。' : reason,
-        );
-      }
+    return value
+        .map<LabelRiskItem?>((item) {
+          if (item is Map<String, dynamic>) {
+            final name = item['name']?.toString().trim() ?? '';
+            final reason = item['reason']?.toString().trim() ?? '';
+            if (name.isEmpty && reason.isEmpty) {
+              return null;
+            }
+            return LabelRiskItem(
+              name: name.isEmpty ? '需留意成分' : name,
+              reason: reason.isEmpty ? '建议结合食用频率和个人情况综合判断。' : reason,
+            );
+          }
 
-      final text = item.toString().trim();
-      if (text.isEmpty) {
-        return null;
-      }
-      return LabelRiskItem(
-        name: text,
-        reason: '建议结合食用频率和个人情况进一步判断。',
-      );
-    }).whereType<LabelRiskItem>().toList();
+          final text = item.toString().trim();
+          if (text.isEmpty) {
+            return null;
+          }
+          return LabelRiskItem(name: text, reason: '建议结合食用频率和个人情况进一步判断。');
+        })
+        .whereType<LabelRiskItem>()
+        .toList();
   }
 
   static String _extractContent(Map<String, dynamic> decoded, String rawBody) {
@@ -406,6 +374,20 @@ class IngredientLabelServiceV2 {
           final content = message['content'];
           if (content is String && content.trim().isNotEmpty) {
             return content.trim();
+          }
+          if (content is List) {
+            final buffer = StringBuffer();
+            for (final item in content) {
+              if (item is Map<String, dynamic>) {
+                final text = item['text'];
+                if (text is String && text.trim().isNotEmpty) {
+                  buffer.writeln(text.trim());
+                }
+              }
+            }
+            if (buffer.isNotEmpty) {
+              return buffer.toString().trim();
+            }
           }
         }
       }
@@ -421,7 +403,8 @@ class IngredientLabelServiceV2 {
       throw const IngredientLabelException('AI 返回内容中没有可解析的 JSON。');
     }
 
-    return jsonDecode(content.substring(start, end + 1)) as Map<String, dynamic>;
+    return jsonDecode(content.substring(start, end + 1))
+        as Map<String, dynamic>;
   }
 
   static List<String> _extractIngredients(String text) {
@@ -451,10 +434,7 @@ class IngredientLabelServiceV2 {
   }
 
   static String _normalizeText(String text) {
-    return text
-        .replaceAll('\r', '')
-        .replaceAll(RegExp(r'[ \t]+'), ' ')
-        .trim();
+    return text.replaceAll('\r', '').replaceAll(RegExp(r'[ \t]+'), ' ').trim();
   }
 
   static String _buildFallbackSummary({
@@ -467,17 +447,6 @@ class IngredientLabelServiceV2 {
     }
 
     return '配料表中识别到 ${allergens.length} 项过敏相关成分、${cautionIngredients.length} 项需留意成分，建议结合个人过敏史和食用频率谨慎判断。';
-  }
-
-  static String _requestId() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-'
-        '${hex.substring(8, 12)}-'
-        '${hex.substring(12, 16)}-'
-        '${hex.substring(16, 20)}-'
-        '${hex.substring(20, 32)}';
   }
 
   static String _clip(String text) {

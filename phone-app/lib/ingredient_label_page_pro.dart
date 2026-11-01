@@ -8,10 +8,7 @@ import 'services/ingredient_label_service_v2.dart';
 import 'ui_kit.dart';
 
 class IngredientLabelPagePro extends StatefulWidget {
-  const IngredientLabelPagePro({
-    super.key,
-    required this.profile,
-  });
+  const IngredientLabelPagePro({super.key, required this.profile});
 
   final AppUserProfile profile;
 
@@ -50,9 +47,9 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
 
   Future<void> _runOcr() async {
     if (_selectedImage == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先拍照或选择一张配料表图片')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先拍照或选择一张配料表图片')));
       return;
     }
 
@@ -107,26 +104,28 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(20),
                       gradient: const LinearGradient(
-                        colors: [
-                          Color(0xFF4A97FF),
-                          Color(0x334A97FF),
-                        ],
+                        colors: [Color(0xFF4A97FF), Color(0x334A97FF)],
                       ),
                     ),
-                    child: const Icon(Icons.document_scanner_rounded, color: Colors.white),
+                    child: const Icon(
+                      Icons.document_scanner_rounded,
+                      color: Colors.white,
+                    ),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('AI OCR 配料分析', style: Theme.of(context).textTheme.titleLarge),
+                        Text(
+                          'AI OCR 配料分析',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
                         const SizedBox(height: 6),
                         Text(
                           '拍摄包装背面的配料表，系统会识别文字并提示过敏原、争议较高成分和购买建议。',
-                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: appMutedText(context),
-                          ),
+                          style: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(color: appMutedText(context)),
                         ),
                       ],
                     ),
@@ -143,7 +142,7 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
                     title: '拍摄提示',
                     subtitle: '尽量拍全整张标签，避免反光和倾斜',
                     trailing: PillBadge(
-                      label: 'vivo OCR',
+                      label: '千问视觉 OCR',
                       icon: Icons.cloud_sync_rounded,
                       color: scheme.primary,
                     ),
@@ -159,14 +158,8 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: isLightTheme(context)
-                            ? const [
-                                Color(0xFFFFFFFF),
-                                Color(0xFFEAF5FF),
-                              ]
-                            : const [
-                                Color(0xFF0D191C),
-                                Color(0xFF112529),
-                              ],
+                            ? const [Color(0xFFFFFFFF), Color(0xFFEAF5FF)]
+                            : const [Color(0xFF0D191C), Color(0xFF112529)],
                       ),
                     ),
                     child: ClipRRect(
@@ -270,7 +263,10 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('过敏原提醒', style: Theme.of(context).textTheme.titleLarge),
+                    Text(
+                      '过敏原提醒',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
                     const SizedBox(height: 14),
                     if (_result!.allergens.isEmpty)
                       Text(
@@ -296,7 +292,10 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('需留意成分', style: Theme.of(context).textTheme.titleLarge),
+                    Text(
+                      '需留意成分',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
                     const SizedBox(height: 14),
                     if (_result!.cautionIngredients.isEmpty)
                       Text(
@@ -362,7 +361,10 @@ class _IngredientLabelPageProState extends State<IngredientLabelPagePro> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('OCR 原文', style: Theme.of(context).textTheme.titleLarge),
+                    Text(
+                      'OCR 原文',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
                     const SizedBox(height: 12),
                     Text(
                       _result!.rawText,
@@ -400,13 +402,14 @@ class _IngredientPlaceholder extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: LinearGradient(
-                  colors: [
-                    scheme.primary,
-                    scheme.primary.withOpacity(0.28),
-                  ],
+                  colors: [scheme.primary, scheme.primary.withOpacity(0.28)],
                 ),
               ),
-              child: const Icon(Icons.receipt_long_rounded, color: Colors.white, size: 34),
+              child: const Icon(
+                Icons.receipt_long_rounded,
+                color: Colors.white,
+                size: 34,
+              ),
             ),
             const SizedBox(height: 16),
             Text(
@@ -418,9 +421,9 @@ class _IngredientPlaceholder extends StatelessWidget {
             Text(
               '建议包含“配料表 / 成分表”整块区域，文字越完整，风险分析越准确。',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: appMutedText(context),
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyLarge?.copyWith(color: appMutedText(context)),
             ),
           ],
         ),
@@ -467,9 +470,9 @@ class _RiskLine extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   description,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: appMutedText(context),
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(color: appMutedText(context)),
                 ),
               ],
             ),

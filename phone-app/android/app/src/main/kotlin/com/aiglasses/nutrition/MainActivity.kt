@@ -8,8 +8,11 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     private val classifierExecutor = Executors.newSingleThreadExecutor()
     private var sceneClassifier: PhoneSceneClassifier? = null
+    private var foodPresenceClassifier: FoodPresenceClassifier? = null
+    private var foodPresenceClassifierError: String? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        HotspotNetworkDetector.install()
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -37,10 +40,61 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "predictFoodProbability" -> {
+                    val bytes = call.arguments as? ByteArray
+                    if (bytes == null || bytes.isEmpty()) {
+                        result.error("invalid_frame", "JPEG bytes are empty", null)
+                        return@setMethodCallHandler
+                    }
+                    classifierExecutor.execute {
+                        try {
+                            val probability = foodClassifier().predictFoodProbability(bytes)
+                            runOnUiThread { result.success(probability) }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.error(
+                                    "food_classification_failed",
+                                    error.message ?: error.javaClass.simpleName,
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
+                "foodModelStatus" -> {
+                    classifierExecutor.execute {
+                        try {
+                            val classifier = foodClassifier()
+                            runOnUiThread {
+                                result.success(
+                                    mapOf(
+                                        "loaded" to true,
+                                        "runtime" to classifier.runtimeName,
+                                        "inputShape" to classifier.inputShape.toList(),
+                                        "outputShape" to classifier.outputShape.toList(),
+                                    ),
+                                )
+                            }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.success(
+                                    mapOf(
+                                        "loaded" to false,
+                                        "runtime" to "cpu",
+                                        "error" to (error.message ?: error.javaClass.simpleName),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
                 "reset" -> {
                     classifierExecutor.execute {
                         sceneClassifier?.close()
                         sceneClassifier = null
+                        foodPresenceClassifier?.close()
+                        foodPresenceClassifier = null
+                        foodPresenceClassifierError = null
                         runOnUiThread { result.success(true) }
                     }
                 }
@@ -51,6 +105,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         sceneClassifier?.close()
+        foodPresenceClassifier?.close()
         classifierExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -59,4 +114,17 @@ class MainActivity : FlutterActivity() {
         sceneClassifier ?: PhoneSceneClassifier(applicationContext).also {
             sceneClassifier = it
         }
+
+    private fun foodClassifier(): FoodPresenceClassifier =
+        foodPresenceClassifier
+            ?: foodPresenceClassifierError?.let { throw IllegalStateException(it) }
+            ?: try {
+                FoodPresenceClassifier(applicationContext).also {
+                    foodPresenceClassifier = it
+                }
+            } catch (error: Exception) {
+                foodPresenceClassifierError =
+                    error.message ?: error.javaClass.simpleName
+                throw error
+            }
 }

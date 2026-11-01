@@ -27,4 +27,18 @@ class CameraOutputSizeSelectorTest {
 
         assertEquals(CaptureOutputSize(1920, 1080), selected)
     }
+
+    @Test
+    fun `selects the largest supported JPEG for packaging capture`() {
+        val selected = CameraOutputSizeSelector.selectHighestQuality(
+            supported = listOf(
+                CaptureOutputSize(1920, 1080),
+                CaptureOutputSize(4032, 3024),
+                CaptureOutputSize(3264, 2448),
+            ),
+            preferredAspectRatio = 4.0 / 3.0,
+        )
+
+        assertEquals(CaptureOutputSize(4032, 3024), selected)
+    }
 }

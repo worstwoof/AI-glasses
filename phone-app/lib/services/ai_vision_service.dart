@@ -5,19 +5,14 @@ import 'package:image_picker/image_picker.dart';
 
 import '../demo_data.dart';
 import '../models.dart';
+import 'ai_provider_config.dart';
 
 class AiVisionService {
   AiVisionService._();
 
-  static const String apiKey = String.fromEnvironment('AI_API_KEY');
-  static const String apiUrl = String.fromEnvironment(
-    'AI_API_URL',
-    defaultValue: 'https://api.openai.com/v1/chat/completions',
-  );
-  static const String model = String.fromEnvironment(
-    'AI_VISION_MODEL',
-    defaultValue: 'gpt-4.1-mini',
-  );
+  static const String apiKey = AiProviderConfig.apiKey;
+  static String get apiUrl => AiProviderConfig.chatCompletionsUrl;
+  static const String model = AiProviderConfig.visionModel;
 
   static bool get isConfigured => apiKey.trim().isNotEmpty;
 
@@ -55,7 +50,8 @@ class AiVisionService {
             {
               'type': 'image_url',
               'image_url': {
-                'url': 'data:${image.mimeType ?? "image/jpeg"};base64,$base64Image',
+                'url':
+                    'data:${image.mimeType ?? "image/jpeg"};base64,$base64Image',
                 'detail': 'low',
               },
             },
@@ -74,7 +70,9 @@ class AiVisionService {
       final response = await request.close();
       final responseBody = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw AiVisionException('AI 接口调用失败：${response.statusCode} $responseBody');
+        throw AiVisionException(
+          'AI 接口调用失败：${response.statusCode} $responseBody',
+        );
       }
 
       final decoded = jsonDecode(responseBody) as Map<String, dynamic>;
@@ -118,13 +116,15 @@ class AiVisionService {
     if (start == -1 || end == -1 || end <= start) {
       throw AiVisionException('AI 返回的内容不是合法 JSON：$content');
     }
-    return jsonDecode(content.substring(start, end + 1)) as Map<String, dynamic>;
+    return jsonDecode(content.substring(start, end + 1))
+        as Map<String, dynamic>;
   }
 
   static AnalysisResult _fromMap(Map<String, dynamic> map) {
-    final recommendations = (map['recommendations'] as List<dynamic>? ?? const [])
-        .map((item) => item.toString())
-        .toList();
+    final recommendations =
+        (map['recommendations'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .toList();
 
     return AnalysisResult(
       foodName: map['food_name']?.toString() ?? '未知餐食',
@@ -166,7 +166,8 @@ class AiVisionService {
 
   static AnalysisResult _mockFromImage(XFile image) {
     final seed = image.path.codeUnits.fold<int>(0, (sum, item) => sum + item);
-    return DemoData.analysisCandidates[seed % DemoData.analysisCandidates.length];
+    return DemoData.analysisCandidates[seed %
+        DemoData.analysisCandidates.length];
   }
 }
 

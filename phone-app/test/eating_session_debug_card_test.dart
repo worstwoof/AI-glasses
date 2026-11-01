@@ -60,6 +60,13 @@ GlassReceiverSnapshot _snapshot() {
     captureMode: CaptureMode.manual,
     automaticCaptureAvailable: false,
     automaticCaptureUnavailableReason: '食品场景模型未加载，自动采集不可用。',
+    foodProbability: 0.91,
+    foodModelAvailable: true,
+    foodModelMessage: '食品模型已加载',
+    autoMealMessage: '进餐中，等待自动结束候选',
+    autoNoHandFrames: 0,
+    autoStableFrames: 0,
+    mealAfterCandidateCapture: null,
     eatingSession: const EatingSessionSnapshot(
       state: EatingSessionState.eating,
       mealSessionId: 'meal_debug',

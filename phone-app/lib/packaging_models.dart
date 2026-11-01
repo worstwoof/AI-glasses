@@ -213,7 +213,7 @@ class PackagingRiskEvaluation {
 
 /// Packaging currently uses cloud OCR followed by deterministic local parsing
 /// and risk rules. It does not invoke a text-generation model.
-enum PackagingAnalysisSource { vivoOcrDeterministic, deterministicText }
+enum PackagingAnalysisSource { qwenVisionOcrDeterministic, deterministicText }
 
 class PackagingAnalysisResult {
   const PackagingAnalysisResult({
@@ -225,6 +225,7 @@ class PackagingAnalysisResult {
     required this.risks,
     required this.suggestions,
     required this.analysisSource,
+    this.productName = '',
   });
 
   final String rawOcrText;
@@ -235,6 +236,7 @@ class PackagingAnalysisResult {
   final List<PackagingRisk> risks;
   final List<String> suggestions;
   final PackagingAnalysisSource analysisSource;
+  final String productName;
 }
 
 /// A user-confirmed packaging scan. It is intentionally independent from

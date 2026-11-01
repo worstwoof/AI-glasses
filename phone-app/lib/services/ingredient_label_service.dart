@@ -6,12 +6,10 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import 'package:image_picker/image_picker.dart';
 
 import '../models.dart';
+import 'ai_provider_config.dart';
 
 class LabelRiskItem {
-  const LabelRiskItem({
-    required this.name,
-    required this.reason,
-  });
+  const LabelRiskItem({required this.name, required this.reason});
 
   final String name;
   final String reason;
@@ -40,15 +38,9 @@ class IngredientLabelAnalysisResult {
 class IngredientLabelService {
   IngredientLabelService._();
 
-  static const String apiKey = String.fromEnvironment('AI_API_KEY');
-  static const String apiUrl = String.fromEnvironment(
-    'AI_API_URL',
-    defaultValue: 'https://api-ai.vivo.com.cn/v1/chat/completions',
-  );
-  static const String textModel = String.fromEnvironment(
-    'AI_TEXT_MODEL',
-    defaultValue: 'Doubao-Seed-2.0-mini',
-  );
+  static const String apiKey = AiProviderConfig.apiKey;
+  static String get apiUrl => AiProviderConfig.chatCompletionsUrl;
+  static const String textModel = AiProviderConfig.textModel;
 
   static bool get aiConfigured => apiKey.trim().isNotEmpty;
 
@@ -91,9 +83,7 @@ class IngredientLabelService {
     AppUserProfile profile,
   ) async {
     final requestId = _requestId();
-    final uri = Uri.parse(apiUrl).replace(
-      queryParameters: <String, String>{'request_id': requestId},
-    );
+    final uri = Uri.parse(apiUrl);
 
     final payload = <String, dynamic>{
       'model': textModel,
@@ -231,8 +221,7 @@ class IngredientLabelService {
         '检测到与你档案中过敏项相关的成分：${matchedUserAllergies.join("、")}，建议直接避免食用。',
       if (caution.isNotEmpty)
         '这份配料表含有 ${caution.first.name} 等需留意成分，建议控制食用频率和份量。',
-      if (ingredients.length > 12)
-        '配料项较多，通常代表加工度较高，可优先选择配料更短、更简单的替代品。',
+      if (ingredients.length > 12) '配料项较多，通常代表加工度较高，可优先选择配料更短、更简单的替代品。',
       '如果是经常购买的包装食品，建议同时查看营养成分表里的钠、糖和反式脂肪信息。',
     ];
 
@@ -278,7 +267,9 @@ class IngredientLabelService {
               allergens: allergens,
               cautionIngredients: caution,
             ),
-      ingredients: ingredients.isEmpty ? _extractIngredients(rawText) : ingredients,
+      ingredients: ingredients.isEmpty
+          ? _extractIngredients(rawText)
+          : ingredients,
       allergens: allergens,
       cautionIngredients: caution,
       suggestions: suggestions.isEmpty
@@ -293,27 +284,27 @@ class IngredientLabelService {
       return const [];
     }
 
-    return value.map<LabelRiskItem?>((item) {
-      if (item is Map<String, dynamic>) {
-        final name = item['name']?.toString().trim() ?? '';
-        final reason = item['reason']?.toString().trim() ?? '';
-        if (name.isEmpty && reason.isEmpty) {
-          return null;
-        }
-        return LabelRiskItem(
-          name: name.isEmpty ? '需留意成分' : name,
-          reason: reason.isEmpty ? '建议结合配料表和食用频率综合判断。' : reason,
-        );
-      }
-      final text = item.toString().trim();
-      if (text.isEmpty) {
-        return null;
-      }
-      return LabelRiskItem(
-        name: text,
-        reason: '建议结合食用频率和个人情况进一步判断。',
-      );
-    }).whereType<LabelRiskItem>().toList();
+    return value
+        .map<LabelRiskItem?>((item) {
+          if (item is Map<String, dynamic>) {
+            final name = item['name']?.toString().trim() ?? '';
+            final reason = item['reason']?.toString().trim() ?? '';
+            if (name.isEmpty && reason.isEmpty) {
+              return null;
+            }
+            return LabelRiskItem(
+              name: name.isEmpty ? '需留意成分' : name,
+              reason: reason.isEmpty ? '建议结合配料表和食用频率综合判断。' : reason,
+            );
+          }
+          final text = item.toString().trim();
+          if (text.isEmpty) {
+            return null;
+          }
+          return LabelRiskItem(name: text, reason: '建议结合食用频率和个人情况进一步判断。');
+        })
+        .whereType<LabelRiskItem>()
+        .toList();
   }
 
   static String _extractContent(Map<String, dynamic> decoded, String rawBody) {
@@ -340,7 +331,8 @@ class IngredientLabelService {
     if (start == -1 || end == -1 || end <= start) {
       throw const IngredientLabelException('AI 返回内容中没有可解析的 JSON。');
     }
-    return jsonDecode(content.substring(start, end + 1)) as Map<String, dynamic>;
+    return jsonDecode(content.substring(start, end + 1))
+        as Map<String, dynamic>;
   }
 
   static List<String> _extractIngredients(String text) {
@@ -370,10 +362,7 @@ class IngredientLabelService {
   }
 
   static String _normalizeText(String text) {
-    return text
-        .replaceAll('\r', '')
-        .replaceAll(RegExp(r'[ \t]+'), ' ')
-        .trim();
+    return text.replaceAll('\r', '').replaceAll(RegExp(r'[ \t]+'), ' ').trim();
   }
 
   static String _buildFallbackSummary({

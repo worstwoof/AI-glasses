@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import 'models.dart';
 import 'packaging_models.dart';
@@ -54,7 +53,7 @@ class _PackagingAnalysisPageState extends State<PackagingAnalysisPage> {
   }
 
   Future<void> _runAnalysis() async {
-    if (_running) return;
+    if (_running || !mounted) return;
     setState(() {
       _running = true;
       _stage = _PackagingPageStage.analyzing;
@@ -65,10 +64,8 @@ class _PackagingAnalysisPageState extends State<PackagingAnalysisPage> {
     try {
       // The received file is the original JPEG. Do not pass it through
       // ImagePicker, resize, or imageQuality before OCR.
-      final result = await _service.analyzeImage(
-        image: XFile(widget.capture.imageFile.path),
-        profile: widget.profile,
-      );
+      final result = await GlassReceiverService.instance
+          .analyzePackagingCapture(widget.capture, widget.profile);
       if (!mounted) return;
       setState(() {
         _running = false;
@@ -434,9 +431,11 @@ class _PackagingAnalysisPageState extends State<PackagingAnalysisPage> {
                             label: Text(_confirmed ? '已保存' : '确认保存'),
                           ),
                           TextButton.icon(
-                            onPressed: _running ? null : _runAnalysis,
+                            onPressed: _running
+                                ? null
+                                : () => Navigator.of(context).pop(),
                             icon: const Icon(Icons.document_scanner_rounded),
-                            label: const Text('重新 OCR'),
+                            label: const Text('返回重新拍摄'),
                           ),
                         ],
                       ],

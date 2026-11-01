@@ -6,7 +6,10 @@ import 'app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await WebRTC.initialize(options: const {'disableNetworkMonitor': true});
+  // Android installs HotspotNetworkDetector before Flutter starts. Keep the
+  // standard monitor enabled; disableNetworkMonitor is not a supported option
+  // in this plugin. ICE uses Wi-Fi, while HTTP AI calls can use mobile data.
+  await WebRTC.initialize();
   runApp(const AiGlassesNutritionApp());
 }
 

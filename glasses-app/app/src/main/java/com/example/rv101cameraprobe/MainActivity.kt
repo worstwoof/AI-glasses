@@ -9,7 +9,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.IBinder
 import android.view.WindowManager
-import android.widget.Button
+import android.graphics.Color
+import android.view.View
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
@@ -19,7 +20,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var statusText: TextView
+    private lateinit var connectionText: TextView
+    private lateinit var stateText: TextView
+    private lateinit var hintText: TextView
+    private lateinit var resultPanel: View
+    private lateinit var resultTitle: TextView
+    private lateinit var resultText: TextView
+    private var resultVisible = false
     private var captureService: CaptureService? = null
     private var bound = false
     private var autoStartAttempted = false
@@ -60,9 +67,12 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        statusText = findViewById(R.id.statusText)
-        findViewById<Button>(R.id.startButton).setOnClickListener { requestStartCapture() }
-        findViewById<Button>(R.id.stopButton).setOnClickListener { stopCapture() }
+        connectionText = findViewById(R.id.connectionText)
+        stateText = findViewById(R.id.stateText)
+        hintText = findViewById(R.id.hintText)
+        resultPanel = findViewById(R.id.resultPanel)
+        resultTitle = findViewById(R.id.resultTitle)
+        resultText = findViewById(R.id.resultText)
         handleLaunchIntent(intent)
         scheduleAutoStart()
     }
@@ -170,7 +180,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (intent.getBooleanExtra(EXTRA_START_CAPTURE, false)) {
             autoStartAttempted = true
-            statusText.post { requestStartCapture() }
+            stateText.post { requestStartCapture() }
         }
     }
 
@@ -196,7 +206,7 @@ class MainActivity : AppCompatActivity() {
             requestStartCapture()
             return
         }
-        statusText.postDelayed({
+        stateText.postDelayed({
             if (!autoStartAttempted && isWindowReadyForCamera()) {
                 autoStartAttempted = true
                 DebugStatus.write(this, "MainActivity.autoStartDelayed")
@@ -228,14 +238,53 @@ class MainActivity : AppCompatActivity() {
 
     private fun showStatus(current: CaptureStatus) {
         runOnUiThread {
-            statusText.text = buildString {
-                append("RV101 相机桥接\n")
-                append("粗场景分类：由手机 App 本地模型处理\n\n")
-                append("采集：${current.state}  相机 %.1f FPS\n".format(current.cameraFps))
-                append("分类帧：低频 JPEG 上报到手机 /api/v1/scene/frames\n")
-                append("实时预览：${current.previewState}  %.1f FPS  控制：${if (current.previewControlReady) "可用" else "等待"}\n".format(current.previewFps))
-                append("${current.previewMessage}\n")
-                append(current.message)
+            connectionText.text = if (current.previewControlReady) "已连接手机" else "正在连接手机"
+            val display = current.display
+            if (display.mode == "result" || display.mode == "error") {
+                resultPanel.animate().cancel()
+                resultPanel.alpha = 1f
+                resultVisible = true
+                resultPanel.visibility = View.VISIBLE
+                resultTitle.text = display.title
+                resultText.text = display.lines.joinToString("\n")
+                val color = when (display.severity) {
+                    GlassesDisplaySeverity.ERROR -> Color.rgb(255, 138, 122)
+                    GlassesDisplaySeverity.WARNING -> Color.rgb(255, 202, 112)
+                    else -> Color.rgb(185, 244, 213)
+                }
+                resultTitle.setTextColor(color)
+                stateText.visibility = View.GONE
+                hintText.text = "详细内容请查看手机"
+            } else {
+                stateText.visibility = View.VISIBLE
+                if (resultVisible) {
+                    resultVisible = false
+                    resultPanel.animate().alpha(0f).setDuration(280).withEndAction {
+                        if (!resultVisible) resultPanel.visibility = View.GONE
+                    }.start()
+                }
+                when (current.state) {
+                    CaptureState.CAPTURING -> {
+                        stateText.text = "正在拍摄"
+                        hintText.text = "请保持包装稳定"
+                    }
+                    CaptureState.ERROR -> {
+                        stateText.text = "需要重试"
+                        hintText.text = "请保持画面稳定，重新拍摄"
+                    }
+                    CaptureState.CAMERA_BUSY -> {
+                        stateText.text = "相机暂不可用"
+                        hintText.text = "正在等待相机恢复"
+                    }
+                    CaptureState.STOPPED, CaptureState.STARTING -> {
+                        stateText.text = "正在准备"
+                        hintText.text = "请打开手机识别页面"
+                    }
+                    else -> {
+                        stateText.text = if (display.mode == "analyzing") display.title else "准备识别包装"
+                        hintText.text = if (display.mode == "analyzing") "请稍候" else "OK 手势拍摄配料表"
+                    }
+                }
             }
         }
     }

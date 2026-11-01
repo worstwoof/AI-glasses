@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'demo_data.dart';
+import 'health_chat_page.dart';
 import 'helpers.dart';
 import 'ingredient_label_page_fast.dart';
 import 'models.dart';
@@ -21,10 +22,7 @@ const AnalysisResult kEmptyAnalysisResult = AnalysisResult(
   fat: 0,
   fiber: 0,
   confidence: 0,
-  recommendations: [
-    '拍照识别后，这里会展示营养分析结果和建议。',
-    '也可以使用配料表 OCR 查看过敏原和需留意成分。',
-  ],
+  recommendations: ['拍照识别后，这里会展示营养分析结果和建议。', '也可以使用配料表 OCR 查看过敏原和需留意成分。'],
   accent: Color(0xFF22B892),
   icon: Icons.hourglass_top_rounded,
 );
@@ -170,9 +168,7 @@ class _AppShellProState extends State<AppShellPro> {
   Future<void> _openIngredientLabelPage() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => IngredientLabelPageFast(
-          profile: _profile,
-        ),
+        builder: (_) => IngredientLabelPageFast(profile: _profile),
       ),
     );
   }
@@ -217,9 +213,9 @@ class _AppShellProState extends State<AppShellPro> {
       _isSyncing = false;
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('同步完成，最新饮食状态已刷新')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('同步完成，最新饮食状态已刷新')));
   }
 
   @override
@@ -227,9 +223,7 @@ class _AppShellProState extends State<AppShellPro> {
     if (_isBootstrapping) {
       return Scaffold(
         body: MeshBackground(
-          child: const Center(
-            child: CircularProgressIndicator(),
-          ),
+          child: const Center(child: CircularProgressIndicator()),
         ),
       );
     }
@@ -254,12 +248,18 @@ class _AppShellProState extends State<AppShellPro> {
         meals: _meals,
         onPreviousMonth: () {
           setState(() {
-            _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
+            _focusedMonth = DateTime(
+              _focusedMonth.year,
+              _focusedMonth.month - 1,
+            );
           });
         },
         onNextMonth: () {
           setState(() {
-            _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1);
+            _focusedMonth = DateTime(
+              _focusedMonth.year,
+              _focusedMonth.month + 1,
+            );
           });
         },
         onSelectDate: (date) {
@@ -268,7 +268,7 @@ class _AppShellProState extends State<AppShellPro> {
           });
         },
       ),
-      InsightPagePro(
+      HealthChatPage(
         profile: _profile,
         isConnected: _isConnected,
         meals: _meals,
@@ -293,43 +293,19 @@ class _AppShellProState extends State<AppShellPro> {
       ),
     ];
 
-    final scheme = Theme.of(context).colorScheme;
-
     return Scaffold(
-      extendBody: true,
+      // Keep the content area above the navigation bar. Extending the body
+      // underneath it makes the chat composer and the last list item hidden.
+      extendBody: false,
       body: MeshBackground(
         child: SafeArea(
           bottom: false,
-          child: IndexedStack(
-            index: _currentIndex,
-            children: pages,
-          ),
-        ),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      floatingActionButton: FloatingPulse(
-        color: scheme.primary,
-        child: FloatingActionButton.large(
-          onPressed: _openRecognitionPage,
-          elevation: 0,
-          backgroundColor: scheme.primary,
-          foregroundColor: scheme.onPrimary,
-          child: const Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.center_focus_strong_rounded, size: 28),
-              SizedBox(height: 2),
-              Text(
-                '识别',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
+          child: IndexedStack(index: _currentIndex, children: pages),
         ),
       ),
       bottomNavigationBar: _DockedNavigationBar(
         currentIndex: _currentIndex,
+        onRecognize: _openRecognitionPage,
         onChanged: (index) {
           setState(() {
             _currentIndex = index;
@@ -378,7 +354,8 @@ class HomePagePro extends StatelessWidget {
         .where((meal) => sameDay(meal.eatenAt, today))
         .take(3)
         .toList();
-    final hasRealAnalysis = lastAnalysis.confidence > 0 && lastAnalysis.calories > 0;
+    final hasRealAnalysis =
+        lastAnalysis.confidence > 0 && lastAnalysis.calories > 0;
     final homeSuggestions = _buildHomeSuggestions(
       profile: profile,
       meals: meals,
@@ -389,7 +366,7 @@ class HomePagePro extends StatelessWidget {
     );
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 132),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
       children: [
         PageHeader(
           title: '今日营养舱',
@@ -399,10 +376,15 @@ class HomePagePro extends StatelessWidget {
             height: 52,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: Colors.white.withOpacity(isLightTheme(context) ? 0.66 : 0.06),
+              color: Colors.white.withOpacity(
+                isLightTheme(context) ? 0.66 : 0.06,
+              ),
               border: Border.all(color: appSoftBorder(context)),
             ),
-            child: Icon(Icons.notifications_none_rounded, color: scheme.onSurface),
+            child: Icon(
+              Icons.notifications_none_rounded,
+              color: scheme.onSurface,
+            ),
           ),
         ),
         const SizedBox(height: 18),
@@ -419,7 +401,9 @@ class HomePagePro extends StatelessWidget {
                     icon: isConnected
                         ? Icons.wifi_tethering_rounded
                         : Icons.link_off_rounded,
-                    color: isConnected ? scheme.primary : const Color(0xFFE57E67),
+                    color: isConnected
+                        ? scheme.primary
+                        : const Color(0xFFE57E67),
                   ),
                   const Spacer(),
                   Text(
@@ -531,7 +515,8 @@ class HomePagePro extends StatelessWidget {
                   Expanded(
                     child: MetricChip(
                       label: '碳水比例',
-                      value: '${(macroSummary.carbs / math.max(macroSummary.total, 1) * 100).round()}%',
+                      value:
+                          '${(macroSummary.carbs / math.max(macroSummary.total, 1) * 100).round()}%',
                       color: const Color(0xFF2AB792),
                     ),
                   ),
@@ -600,7 +585,9 @@ class HomePagePro extends StatelessWidget {
                 subtitle: '识别结果会自动回写到这里',
                 trailing: Text(
                   '${latestMeals.length} 条记录',
-                  style: theme.textTheme.bodyMedium?.copyWith(color: scheme.primary),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: scheme.primary,
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -633,13 +620,18 @@ class HomePagePro extends StatelessWidget {
                     borderRadius: BorderRadius.circular(20),
                     gradient: LinearGradient(
                       colors: [
-                        (hasRealAnalysis ? lastAnalysis.accent : scheme.primary),
+                        (hasRealAnalysis
+                            ? lastAnalysis.accent
+                            : scheme.primary),
                         (hasRealAnalysis ? lastAnalysis.accent : scheme.primary)
                             .withOpacity(0.25),
                       ],
                     ),
                   ),
-                  child: const Icon(Icons.auto_awesome_rounded, color: Colors.white),
+                  child: const Icon(
+                    Icons.auto_awesome_rounded,
+                    color: Colors.white,
+                  ),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -648,17 +640,19 @@ class HomePagePro extends StatelessWidget {
                     children: [
                       Text('今日智能建议', style: theme.textTheme.titleLarge),
                       const SizedBox(height: 8),
-                      ...homeSuggestions.take(2).map(
-                        (tip) => Padding(
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: Text(
-                            tip,
-                            style: theme.textTheme.bodyLarge?.copyWith(
-                              color: appMutedText(context),
+                      ...homeSuggestions
+                          .take(2)
+                          .map(
+                            (tip) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                tip,
+                                style: theme.textTheme.bodyLarge?.copyWith(
+                                  color: appMutedText(context),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -692,16 +686,25 @@ class CalendarPagePro extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final days = buildCalendarDays(focusedMonth);
-    final mealsOfDay = meals.where((meal) => sameDay(meal.eatenAt, selectedDate)).toList()
-      ..sort((a, b) => a.eatenAt.compareTo(b.eatenAt));
-    final totalCalories = mealsOfDay.fold<int>(0, (sum, meal) => sum + meal.calories);
-    final totalCarbs = mealsOfDay.fold<double>(0, (sum, meal) => sum + meal.carbs).round();
-    final totalProtein =
-        mealsOfDay.fold<double>(0, (sum, meal) => sum + meal.protein).round();
-    final totalFat = mealsOfDay.fold<double>(0, (sum, meal) => sum + meal.fat).round();
+    final mealsOfDay =
+        meals.where((meal) => sameDay(meal.eatenAt, selectedDate)).toList()
+          ..sort((a, b) => a.eatenAt.compareTo(b.eatenAt));
+    final totalCalories = mealsOfDay.fold<int>(
+      0,
+      (sum, meal) => sum + meal.calories,
+    );
+    final totalCarbs = mealsOfDay
+        .fold<double>(0, (sum, meal) => sum + meal.carbs)
+        .round();
+    final totalProtein = mealsOfDay
+        .fold<double>(0, (sum, meal) => sum + meal.protein)
+        .round();
+    final totalFat = mealsOfDay
+        .fold<double>(0, (sum, meal) => sum + meal.fat)
+        .round();
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 132),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
       children: [
         PageHeader(
           title: '营养日历',
@@ -761,7 +764,9 @@ class CalendarPagePro extends StatelessWidget {
                   final day = days[index];
                   final isCurrentMonth = day.month == focusedMonth.month;
                   final isSelected = sameDay(day, selectedDate);
-                  final hasMeal = meals.any((meal) => sameDay(meal.eatenAt, day));
+                  final hasMeal = meals.any(
+                    (meal) => sameDay(meal.eatenAt, day),
+                  );
                   return Material(
                     color: Colors.transparent,
                     child: InkWell(
@@ -774,14 +779,14 @@ class CalendarPagePro extends StatelessWidget {
                           color: isSelected
                               ? scheme.primary.withOpacity(0.16)
                               : hasMeal
-                                  ? scheme.primary.withOpacity(0.08)
-                                  : Colors.transparent,
+                              ? scheme.primary.withOpacity(0.08)
+                              : Colors.transparent,
                           border: Border.all(
                             color: isSelected
                                 ? scheme.primary
                                 : hasMeal
-                                    ? scheme.primary.withOpacity(0.12)
-                                    : appSoftBorder(context),
+                                ? scheme.primary.withOpacity(0.12)
+                                : appSoftBorder(context),
                           ),
                         ),
                         child: Stack(
@@ -830,26 +835,37 @@ class CalendarPagePro extends StatelessWidget {
               const SizedBox(height: 16),
               Row(
                 children: [
-                  Expanded(child: MetricChip(label: '总摄入', value: '$totalCalories kcal')),
+                  Expanded(
+                    child: MetricChip(
+                      label: '总摄入',
+                      value: '$totalCalories kcal',
+                    ),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: MetricChip(label: '碳水', value: '$totalCarbs g')),
+                  Expanded(
+                    child: MetricChip(label: '碳水', value: '$totalCarbs g'),
+                  ),
                 ],
               ),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: MetricChip(label: '蛋白质', value: '$totalProtein g')),
+                  Expanded(
+                    child: MetricChip(label: '蛋白质', value: '$totalProtein g'),
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: MetricChip(label: '脂肪', value: '$totalFat g')),
+                  Expanded(
+                    child: MetricChip(label: '脂肪', value: '$totalFat g'),
+                  ),
                 ],
               ),
               const SizedBox(height: 18),
               if (mealsOfDay.isEmpty)
                 Text(
                   '这一天还没有饮食记录，可以点击底部中心按钮开始拍照识别。',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: appMutedText(context),
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(color: appMutedText(context)),
                 )
               else
                 for (var i = 0; i < mealsOfDay.length; i++) ...[
@@ -894,9 +910,13 @@ class InsightPagePro extends StatelessWidget {
     final today = DateTime.now();
     final hasTodayMeals = meals.any((meal) => sameDay(meal.eatenAt, today));
     final hasRealAnalysis =
-        hasTodayMeals && lastAnalysis.confidence > 0 && lastAnalysis.calories > 0;
+        hasTodayMeals &&
+        lastAnalysis.confidence > 0 &&
+        lastAnalysis.calories > 0;
     final weeklyCalories = _buildWeeklyCalories(meals);
-    final peak = weeklyCalories.fold<double>(0, math.max).clamp(1, double.infinity);
+    final peak = weeklyCalories
+        .fold<double>(0, math.max)
+        .clamp(1, double.infinity);
     const weekLabels = ['一', '二', '三', '四', '五', '六', '今'];
     final scheme = Theme.of(context).colorScheme;
     final insightSuggestions = _buildInsightSuggestions(
@@ -909,14 +929,16 @@ class InsightPagePro extends StatelessWidget {
     );
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 132),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
       children: [
         PageHeader(
           title: '健康分析',
           subtitle: '把识别结果转成可以执行的饮食策略',
           trailing: PillBadge(
             label: aiConfigured ? 'AI 已配置' : '演示模式',
-            icon: aiConfigured ? Icons.cloud_done_rounded : Icons.science_rounded,
+            icon: aiConfigured
+                ? Icons.cloud_done_rounded
+                : Icons.science_rounded,
             color: aiConfigured ? scheme.primary : const Color(0xFFE39B64),
           ),
         ),
@@ -934,7 +956,9 @@ class InsightPagePro extends StatelessWidget {
                     child: MetricChip(
                       label: '眼镜连接',
                       value: isConnected ? '在线' : '离线',
-                      color: isConnected ? scheme.primary : const Color(0xFFE57E67),
+                      color: isConnected
+                          ? scheme.primary
+                          : const Color(0xFFE57E67),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -963,17 +987,14 @@ class InsightPagePro extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              PageHeader(
-                title: '近 7 日热量趋势',
-                subtitle: '完全基于本地饮食记录聚合',
-              ),
+              PageHeader(title: '近 7 日热量趋势', subtitle: '完全基于本地饮食记录聚合'),
               const SizedBox(height: 18),
               if (meals.isEmpty)
                 Text(
                   '还没有足够的饮食记录，开始拍照识别后这里会形成你的近 7 日趋势。',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: appMutedText(context),
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyLarge?.copyWith(color: appMutedText(context)),
                 )
               else
                 SizedBox(
@@ -991,9 +1012,8 @@ class InsightPagePro extends StatelessWidget {
                             children: [
                               Text(
                                 value.round().toString(),
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: appMutedText(context),
-                                ),
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(color: appMutedText(context)),
                               ),
                               const SizedBox(height: 8),
                               AnimatedContainer(
@@ -1161,7 +1181,7 @@ class ProfilePagePro extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 132),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
       children: [
         PageHeader(
           title: '个人档案',
@@ -1183,20 +1203,24 @@ class ProfilePagePro extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: LinearGradient(
-                    colors: [
-                      scheme.primary,
-                      scheme.primary.withOpacity(0.35),
-                    ],
+                    colors: [scheme.primary, scheme.primary.withOpacity(0.35)],
                   ),
                 ),
-                child: const Icon(Icons.person_rounded, size: 36, color: Colors.white),
+                child: const Icon(
+                  Icons.person_rounded,
+                  size: 36,
+                  color: Colors.white,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(profile.name, style: Theme.of(context).textTheme.titleLarge),
+                    Text(
+                      profile.name,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
                     const SizedBox(height: 6),
                     Text(
                       '连接设备：${profile.deviceName}',
@@ -1210,7 +1234,9 @@ class ProfilePagePro extends StatelessWidget {
                       icon: isConnected
                           ? Icons.bluetooth_connected_rounded
                           : Icons.bluetooth_disabled_rounded,
-                      color: isConnected ? scheme.primary : const Color(0xFFE57E67),
+                      color: isConnected
+                          ? scheme.primary
+                          : const Color(0xFFE57E67),
                       soft: true,
                     ),
                   ],
@@ -1227,7 +1253,10 @@ class ProfilePagePro extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('身体信息', style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      '身体信息',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 14),
                     Text('性别：${profile.gender}'),
                     const SizedBox(height: 8),
@@ -1246,7 +1275,10 @@ class ProfilePagePro extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('饮食策略', style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      '饮食策略',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 14),
                     Text('目标：${profile.goal}'),
                     const SizedBox(height: 8),
@@ -1276,7 +1308,9 @@ class ProfilePagePro extends StatelessWidget {
                     child: MetricChip(
                       label: '识图接口',
                       value: aiConfigured ? '已配置' : '演示模式',
-                      color: aiConfigured ? scheme.primary : const Color(0xFFE39B64),
+                      color: aiConfigured
+                          ? scheme.primary
+                          : const Color(0xFFE39B64),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1312,9 +1346,9 @@ class ProfilePagePro extends StatelessWidget {
               const SizedBox(height: 14),
               Text(
                 syncText,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: appMutedText(context),
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: appMutedText(context)),
               ),
               const SizedBox(height: 16),
               SwitchListTile(
@@ -1375,7 +1409,9 @@ List<String> _buildHomeSuggestions({
   required AnalysisResult lastAnalysis,
 }) {
   final today = DateTime.now();
-  final todayMeals = meals.where((meal) => sameDay(meal.eatenAt, today)).toList();
+  final todayMeals = meals
+      .where((meal) => sameDay(meal.eatenAt, today))
+      .toList();
   if (todayMeals.isEmpty) {
     return const [];
   }
@@ -1391,7 +1427,9 @@ List<String> _buildHomeSuggestions({
   } else if (remainingCalories < 300) {
     suggestions.add('今天剩余热量不多，下一餐建议尽量清淡，避免高油和高糖加餐。');
   } else {
-    suggestions.add('今天还剩 $remainingCalories kcal，可以继续围绕 ${profile.goal} 做更稳的餐次安排。');
+    suggestions.add(
+      '今天还剩 $remainingCalories kcal，可以继续围绕 ${profile.goal} 做更稳的餐次安排。',
+    );
   }
 
   if (fatRatio > 0.42) {
@@ -1406,7 +1444,9 @@ List<String> _buildHomeSuggestions({
     suggestions.add(lastAnalysis.recommendations.first);
   } else {
     final latestMeal = todayMeals.first;
-    suggestions.add('你最近一餐是“${latestMeal.name}”，建议继续结合 ${profile.preference} 控制总量和烹调方式。');
+    suggestions.add(
+      '你最近一餐是“${latestMeal.name}”，建议继续结合 ${profile.preference} 控制总量和烹调方式。',
+    );
   }
 
   return suggestions.take(3).toList();
@@ -1421,7 +1461,9 @@ List<String> _buildInsightSuggestions({
   required AnalysisResult lastAnalysis,
 }) {
   final today = DateTime.now();
-  final todayMeals = meals.where((meal) => sameDay(meal.eatenAt, today)).toList();
+  final todayMeals = meals
+      .where((meal) => sameDay(meal.eatenAt, today))
+      .toList();
   if (todayMeals.isEmpty) {
     return const [];
   }
@@ -1429,19 +1471,24 @@ List<String> _buildInsightSuggestions({
   final suggestions = <String>[];
   final weeklyCalories = _buildWeeklyCalories(meals);
   final todayWeeklyAverage =
-      weeklyCalories.fold<double>(0, (sum, item) => sum + item) / weeklyCalories.length;
+      weeklyCalories.fold<double>(0, (sum, item) => sum + item) /
+      weeklyCalories.length;
 
   if (eatenCalories > profile.dailyTargetCalories) {
-    suggestions.add('今天摄入 ${eatenCalories - profile.dailyTargetCalories} kcal 超过目标，建议明天把高油高糖餐次压缩到 1 次以内。');
+    suggestions.add(
+      '今天摄入 ${eatenCalories - profile.dailyTargetCalories} kcal 超过目标，建议明天把高油高糖餐次压缩到 1 次以内。',
+    );
   } else if (eatenCalories < (profile.dailyTargetCalories * 0.55).round()) {
     suggestions.add('今天总摄入明显低于目标，如果不是刻意控卡，建议补足主食和优质蛋白，避免后续暴食。');
   }
 
-  if (weeklyCalories.last > todayWeeklyAverage * 1.15 && todayWeeklyAverage > 0) {
+  if (weeklyCalories.last > todayWeeklyAverage * 1.15 &&
+      todayWeeklyAverage > 0) {
     suggestions.add('今天热量高于近 7 日平均值，接下来 1 到 2 餐可适当回到更清淡、更低油的结构。');
   }
 
-  if (macroSummary.fat > macroSummary.protein && macroSummary.fat > macroSummary.carbs) {
+  if (macroSummary.fat > macroSummary.protein &&
+      macroSummary.fat > macroSummary.carbs) {
     suggestions.add('今天脂肪是主要来源，之后尽量减少火锅蘸料、炸物和浓汤，提升蔬菜和蛋白占比。');
   } else if (macroSummary.protein >= macroSummary.fat &&
       macroSummary.protein >= macroSummary.carbs) {
@@ -1449,7 +1496,9 @@ List<String> _buildInsightSuggestions({
   }
 
   if (profile.allergies.isNotEmpty) {
-    suggestions.add('你的档案里有过敏原：${profile.allergies.join('、')}，继续拍照和扫配料表时要重点规避相关成分。');
+    suggestions.add(
+      '你的档案里有过敏原：${profile.allergies.join('、')}，继续拍照和扫配料表时要重点规避相关成分。',
+    );
   }
 
   if (lastAnalysis.confidence > 0) {
@@ -1462,10 +1511,12 @@ List<String> _buildInsightSuggestions({
 class _DockedNavigationBar extends StatelessWidget {
   const _DockedNavigationBar({
     required this.currentIndex,
+    required this.onRecognize,
     required this.onChanged,
   });
 
   final int currentIndex;
+  final VoidCallback onRecognize;
   final ValueChanged<int> onChanged;
 
   @override
@@ -1474,59 +1525,65 @@ class _DockedNavigationBar extends StatelessWidget {
 
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: Container(
-          height: 92,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            color: appElevatedSurface(context),
-            border: Border.all(color: appSoftBorder(context)),
-            boxShadow: [
-              BoxShadow(
-                color: scheme.primary.withOpacity(0.08),
-                blurRadius: 28,
-                offset: const Offset(0, 16),
+      child: Container(
+        width: double.infinity,
+        height: 72,
+        decoration: BoxDecoration(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          color: appElevatedSurface(context),
+          border: Border(top: BorderSide(color: appSoftBorder(context))),
+          boxShadow: [
+            BoxShadow(
+              color: scheme.primary.withOpacity(0.08),
+              blurRadius: 18,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: _NavItem(
+                icon: Icons.home_rounded,
+                label: '首页',
+                selected: currentIndex == 0,
+                onTap: () => onChanged(0),
               ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: _NavItem(
-                  icon: Icons.home_rounded,
-                  label: '首页',
-                  selected: currentIndex == 0,
-                  onTap: () => onChanged(0),
-                ),
+            ),
+            Expanded(
+              child: _NavItem(
+                icon: Icons.calendar_month_rounded,
+                label: '日历',
+                selected: currentIndex == 1,
+                onTap: () => onChanged(1),
               ),
-              Expanded(
-                child: _NavItem(
-                  icon: Icons.calendar_month_rounded,
-                  label: '日历',
-                  selected: currentIndex == 1,
-                  onTap: () => onChanged(1),
-                ),
+            ),
+            Expanded(
+              child: _NavItem(
+                icon: Icons.center_focus_strong_rounded,
+                label: '识别',
+                selected: false,
+                emphasized: true,
+                onTap: onRecognize,
               ),
-              const SizedBox(width: 86),
-              Expanded(
-                child: _NavItem(
-                  icon: Icons.monitor_heart_outlined,
-                  label: '分析',
-                  selected: currentIndex == 2,
-                  onTap: () => onChanged(2),
-                ),
+            ),
+            Expanded(
+              child: _NavItem(
+                icon: Icons.monitor_heart_outlined,
+                label: '分析',
+                selected: currentIndex == 2,
+                onTap: () => onChanged(2),
               ),
-              Expanded(
-                child: _NavItem(
-                  icon: Icons.person_outline_rounded,
-                  label: '档案',
-                  selected: currentIndex == 3,
-                  onTap: () => onChanged(3),
-                ),
+            ),
+            Expanded(
+              child: _NavItem(
+                icon: Icons.person_outline_rounded,
+                label: '档案',
+                selected: currentIndex == 3,
+                onTap: () => onChanged(3),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1539,12 +1596,14 @@ class _NavItem extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.emphasized = false,
   });
 
   final IconData icon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final bool emphasized;
 
   @override
   Widget build(BuildContext context) {
@@ -1557,11 +1616,13 @@ class _NavItem extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
-          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(22),
-            color: selected ? scheme.primary.withOpacity(0.10) : Colors.transparent,
+            color: selected || emphasized
+                ? scheme.primary.withOpacity(0.10)
+                : Colors.transparent,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1569,15 +1630,22 @@ class _NavItem extends StatelessWidget {
             children: [
               Icon(
                 icon,
-                color: selected ? scheme.primary : appMutedText(context),
+                size: 22,
+                color: selected || emphasized
+                    ? scheme.primary
+                    : appMutedText(context),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 2),
               Text(
                 label,
                 style: TextStyle(
                   fontSize: 10.5,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                  color: selected ? scheme.primary : appMutedText(context),
+                  fontWeight: selected || emphasized
+                      ? FontWeight.w800
+                      : FontWeight.w600,
+                  color: selected || emphasized
+                      ? scheme.primary
+                      : appMutedText(context),
                 ),
               ),
             ],

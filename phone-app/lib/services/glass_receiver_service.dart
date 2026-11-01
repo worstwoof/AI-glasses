@@ -8,17 +8,26 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../models.dart';
 import '../packaging_models.dart';
+import 'packaging_analysis_service.dart';
+import 'packaging_analysis_jobs.dart';
+import 'auto_candidate_tracker.dart';
 import 'capture_coordinator.dart';
 import 'capture_intent.dart';
 import 'capture_mode_controller.dart';
 import 'capture_quality_evaluator.dart';
 import 'capture_upload_deduplicator.dart';
+import 'auto_meal_end_detector.dart';
 import 'eating_session_controller.dart';
 import 'food_scene_classifier.dart';
+import 'lan_ice_policy.dart';
+import 'frame_stability_tracker.dart';
 import 'packaging_capture_trigger_policy.dart';
 import 'phone_scene_classifier.dart';
+import 'packaging_display_summary.dart';
 
 class GlassCapture {
   const GlassCapture({
@@ -34,6 +43,8 @@ class GlassCapture {
   String get trigger => metadata['trigger']?.toString() ?? 'unknown';
 
   String get scene => metadata['scene']?.toString() ?? 'unknown';
+
+  bool get qualityAccepted => metadata['_qualityAccepted'] != false;
 }
 
 class GlassReceiverSnapshot {
@@ -62,6 +73,13 @@ class GlassReceiverSnapshot {
     required this.automaticCaptureUnavailableReason,
     required this.eatingSession,
     required this.captureCoordinator,
+    required this.foodProbability,
+    required this.foodModelAvailable,
+    required this.foodModelMessage,
+    required this.autoMealMessage,
+    required this.autoNoHandFrames,
+    required this.autoStableFrames,
+    required this.mealAfterCandidateCapture,
     required this.error,
   });
 
@@ -89,6 +107,13 @@ class GlassReceiverSnapshot {
   final String automaticCaptureUnavailableReason;
   final EatingSessionSnapshot eatingSession;
   final CaptureCoordinatorSnapshot captureCoordinator;
+  final double? foodProbability;
+  final bool foodModelAvailable;
+  final String foodModelMessage;
+  final String autoMealMessage;
+  final int autoNoHandFrames;
+  final int autoStableFrames;
+  final GlassCapture? mealAfterCandidateCapture;
   final String? error;
 
   String get primaryIp {
@@ -178,6 +203,60 @@ class GlassReceiverService extends ChangeNotifier {
 
   final _captureController = StreamController<GlassCapture>.broadcast();
   final _remoteStreamController = StreamController<MediaStream?>.broadcast();
+  final Set<String> _sentPackagingAnalysisTasks = <String>{};
+  final Map<String, Map<String, dynamic>> _pendingAnalysisMessages = {};
+  final _packagingJobs = PackagingAnalysisJobs();
+  AppUserProfile? _packagingProfile;
+  int _activePackagingJobs = 0;
+
+  void updatePackagingProfile(AppUserProfile profile) =>
+      _packagingProfile = profile;
+
+  Future<PackagingAnalysisResult> analyzePackagingCapture(
+    GlassCapture capture,
+    AppUserProfile profile,
+  ) {
+    final key =
+        capture.metadata['captureTaskId']?.toString() ?? capture.imageFile.path;
+    return _packagingJobs.runOnce(
+      key,
+      () => _runPackagingAnalysis(capture, profile, key),
+    );
+  }
+
+  Future<PackagingAnalysisResult> _runPackagingAnalysis(
+    GlassCapture capture,
+    AppUserProfile profile,
+    String key,
+  ) async {
+    _activePackagingJobs++;
+    try {
+      if (!capture.qualityAccepted ||
+          capture.metadata['captureSource'] != 'high_res_jpeg') {
+        throw const PackagingAnalysisException('包装图片未通过高清质量检查，请重新拍摄。');
+      }
+      await sendAnalysisStatus(
+        status: 'analyzing',
+        title: '正在识别配料表',
+        captureTaskId: key,
+      );
+      final result = await const PackagingAnalysisService()
+          .analyzeImage(image: XFile(capture.imageFile.path), profile: profile)
+          .timeout(const Duration(seconds: 90));
+      await sendPackagingAnalysisResult(result, captureTaskId: key);
+      return result;
+    } catch (error) {
+      await sendAnalysisStatus(
+        status: 'error',
+        title: '识别失败',
+        message: '请重新拍摄清晰的配料表',
+        captureTaskId: key,
+      );
+      rethrow;
+    } finally {
+      _activePackagingJobs--;
+    }
+  }
 
   HttpServer? _server;
   RTCPeerConnection? _peerConnection;
@@ -213,7 +292,10 @@ class GlassReceiverService extends ChangeNotifier {
   final _automaticPackagingCapture = PackagingCaptureTriggerState();
   final _captureUploadDeduplicator = CaptureUploadDeduplicator();
   final _qualityEvaluator = const CaptureQualityEvaluator();
-  final _foodSceneClassifier = const UnavailableFoodSceneClassifier();
+  final _foodSceneClassifier = TfliteFoodSceneClassifier();
+  final _autoCandidateTracker = AutoCandidateTracker();
+  final _autoMealEndDetector = AutoMealEndDetector();
+  final _frameStabilityTracker = FrameStabilityTracker();
   late final CaptureCoordinator _captureCoordinator;
   late final CaptureModeController _captureModeController;
   late final EatingSessionController _eatingSessionController;
@@ -221,6 +303,15 @@ class GlassReceiverService extends ChangeNotifier {
   GlassCapture? _mealBeforeCapture;
   final List<GlassCapture> _mealDuringCaptures = <GlassCapture>[];
   GlassCapture? _mealAfterCapture;
+  GlassCapture? _mealAfterCandidateCapture;
+  double? _foodProbability;
+  bool _foodModelAvailable = false;
+  String _foodModelMessage = '食品模型正在初始化';
+  bool _foodModelFailureLatched = false;
+  String _autoMealMessage = '等待自动进餐';
+  int _autoNoHandFrames = 0;
+  int _autoStableFrames = 0;
+  EatingSessionState _lastEatingState = EatingSessionState.idle;
   String? _lastAutomaticFoodFingerprint;
   String? _error;
   bool _automaticCapturesAllowed = true;
@@ -230,7 +321,7 @@ class GlassReceiverService extends ChangeNotifier {
   Stream<MediaStream?> get remoteStreams => _remoteStreamController.stream;
 
   bool get isPackagingAnalysisActive =>
-      _automaticPackagingCapture.analysisActive;
+      _automaticPackagingCapture.analysisActive || _activePackagingJobs > 0;
 
   void setPackagingAnalysisActive(bool active) {
     _automaticPackagingCapture.analysisActive = active;
@@ -252,6 +343,11 @@ class GlassReceiverService extends ChangeNotifier {
   bool setCaptureMode(CaptureMode mode) {
     if (_eatingSessionController.state != EatingSessionState.idle) {
       _error = '进食 Session 进行中，暂不能切换采集模式。';
+      notifyListeners();
+      return false;
+    }
+    if (mode != CaptureMode.manual && !_foodModelAvailable) {
+      _error = _foodModelMessage;
       notifyListeners();
       return false;
     }
@@ -286,10 +382,20 @@ class GlassReceiverService extends ChangeNotifier {
     mealDuringCaptures: List<GlassCapture>.unmodifiable(_mealDuringCaptures),
     mealAfterCapture: _mealAfterCapture,
     captureMode: _captureModeController.mode,
-    automaticCaptureAvailable: _captureModeController.automaticAvailable,
-    automaticCaptureUnavailableReason: _captureModeController.unavailableReason,
+    automaticCaptureAvailable:
+        _captureModeController.automaticAvailable && _foodModelAvailable,
+    automaticCaptureUnavailableReason: _foodModelAvailable
+        ? _captureModeController.unavailableReason
+        : _foodModelMessage,
     eatingSession: _eatingSessionController.snapshot,
     captureCoordinator: _captureCoordinator.snapshot,
+    foodProbability: _foodProbability,
+    foodModelAvailable: _foodModelAvailable,
+    foodModelMessage: _foodModelMessage,
+    autoMealMessage: _autoMealMessage,
+    autoNoHandFrames: _autoNoHandFrames,
+    autoStableFrames: _autoStableFrames,
+    mealAfterCandidateCapture: _mealAfterCandidateCapture,
     error: _error,
   );
 
@@ -309,6 +415,7 @@ class GlassReceiverService extends ChangeNotifier {
       _running = true;
       _serverMessage = '正在监听 ${_port ?? defaultPort} 端口';
       _error = null;
+      await _initializeFoodModel();
       _ensureGlassesDiscoveryLoop();
     } catch (error) {
       _running = false;
@@ -318,6 +425,20 @@ class GlassReceiverService extends ChangeNotifier {
       _starting = false;
       notifyListeners();
     }
+  }
+
+  Future<void> _initializeFoodModel() async {
+    if (_foodModelFailureLatched) return;
+    try {
+      await _foodSceneClassifier.initialize();
+      _foodModelAvailable = true;
+      _foodModelMessage = '食品模型已加载（${_foodSceneClassifier.runtimeDescription}）';
+    } catch (error) {
+      _foodModelAvailable = false;
+      _foodModelFailureLatched = true;
+      _foodModelMessage = '食品模型不可用：$error';
+    }
+    notifyListeners();
   }
 
   Future<void> stop() async {
@@ -430,6 +551,91 @@ class GlassReceiverService extends ChangeNotifier {
     }
   }
 
+  Future<bool> sendAnalysisStatus({
+    required String status,
+    required String title,
+    String? message,
+    String? captureTaskId,
+  }) {
+    final payload = <String, dynamic>{
+      'type': 'analysis_status',
+      'analysisType': 'packaging_ocr',
+      'status': status,
+      'title': title,
+      if (message != null && message.isNotEmpty) 'message': message,
+      if (captureTaskId != null && captureTaskId.isNotEmpty)
+        'captureTaskId': captureTaskId,
+    };
+    return _sendControlPayload(
+      payload,
+      unavailableMessage: '分析状态暂未发送，眼镜控制通道尚未建立。',
+    );
+  }
+
+  Future<bool> sendPackagingAnalysisResult(
+    PackagingAnalysisResult result, {
+    String? captureTaskId,
+  }) async {
+    if (captureTaskId != null &&
+        captureTaskId.isNotEmpty &&
+        _sentPackagingAnalysisTasks.contains(captureTaskId)) {
+      return true;
+    }
+    final summary = buildPackagingDisplaySummary(result);
+    final sent = await _sendControlPayload(
+      summary.toMap(captureTaskId: captureTaskId),
+      unavailableMessage: 'OCR 已完成，但眼镜控制通道暂未建立。',
+    );
+    if (sent && captureTaskId != null && captureTaskId.isNotEmpty) {
+      _sentPackagingAnalysisTasks.add(captureTaskId);
+    }
+    return sent;
+  }
+
+  Future<bool> _sendControlPayload(
+    Map<String, dynamic> payloadMap, {
+    required String unavailableMessage,
+  }) async {
+    final key = payloadMap['captureTaskId']?.toString() ?? 'latest';
+    _pendingAnalysisMessages[key] = payloadMap;
+    if (_pendingAnalysisMessages.length > 20) {
+      _pendingAnalysisMessages.remove(_pendingAnalysisMessages.keys.first);
+    }
+    final channel = _controlChannel;
+    if (channel == null ||
+        channel.state != RTCDataChannelState.RTCDataChannelOpen) {
+      _error = unavailableMessage;
+      notifyListeners();
+      return false;
+    }
+    try {
+      await channel.send(RTCDataChannelMessage(jsonEncode(payloadMap)));
+      if (identical(_pendingAnalysisMessages[key], payloadMap)) {
+        _pendingAnalysisMessages.remove(key);
+      }
+      _error = null;
+      notifyListeners();
+      return true;
+    } catch (error) {
+      _error = '发送眼镜分析结果失败：$error';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> _flushAnalysisMessages() async {
+    for (final payload in _pendingAnalysisMessages.values.toList()) {
+      final sent = await _sendControlPayload(
+        payload,
+        unavailableMessage: '结果保留在手机，等待眼镜重连。',
+      );
+      if (!sent) break;
+      if (payload['type'] == 'analysis_result') {
+        _sentPackagingAnalysisTasks.add(payload['captureTaskId'].toString());
+      }
+    }
+  }
+
   Future<bool> _dispatchCaptureIntent(CaptureIntent intent) {
     return sendCaptureCommand(
       captureType: intent.captureType,
@@ -461,7 +667,7 @@ class GlassReceiverService extends ChangeNotifier {
   Future<CaptureTaskResult> requestPackagingCapture({
     String trigger = 'packaging_button',
     Duration delay = Duration.zero,
-    bool allowAutomaticRetake = false,
+    bool allowAutomaticRetake = true,
     CaptureIntentSource source = CaptureIntentSource.manual,
   }) {
     if (source == CaptureIntentSource.automatic && !_automaticCapturesAllowed) {
@@ -473,7 +679,7 @@ class GlassReceiverService extends ChangeNotifier {
         ),
       );
     }
-    if (_automaticPackagingCapture.analysisActive) {
+    if (isPackagingAnalysisActive) {
       return Future<CaptureTaskResult>.value(
         CaptureTaskResult(
           taskId: _newCaptureTaskId(),
@@ -505,6 +711,36 @@ class GlassReceiverService extends ChangeNotifier {
 
   void cancelEatingSession() => _eatingSessionController.cancel();
 
+  void confirmMealAfterCandidate() {
+    if (_mealAfterCandidateCapture == null) return;
+    _promoteMealAfterCandidate();
+    _eatingSessionController.confirmMealAfterCandidate();
+  }
+
+  void cancelMealAfterCandidate() {
+    _mealAfterCandidateCapture = null;
+    _autoMealEndDetector.reset();
+    _eatingSessionController.cancelMealAfterCandidate();
+    notifyListeners();
+  }
+
+  void _promoteMealAfterCandidate() {
+    final candidate = _mealAfterCandidateCapture;
+    if (candidate == null) return;
+    _mealAfterCapture = GlassCapture(
+      imageFile: candidate.imageFile,
+      metadata: <String, dynamic>{
+        ...candidate.metadata,
+        'scene': 'meal_after',
+        'trigger': 'auto_meal_end_confirmed',
+      },
+      receivedAt: candidate.receivedAt,
+    );
+    _mealAfterCandidateCapture = null;
+    _serverMessage = '餐后候选已确认，进入餐后分析';
+    notifyListeners();
+  }
+
   void _handleCaptureCoordinatorChanged(CaptureCoordinatorSnapshot snapshot) {
     if (snapshot.state == CaptureTaskState.waitingDelay) {
       _serverMessage = '抓拍任务等待稳定画面：${snapshot.scene ?? 'unknown'}';
@@ -524,7 +760,25 @@ class GlassReceiverService extends ChangeNotifier {
       _mealBeforeCapture = null;
       _mealDuringCaptures.clear();
       _mealAfterCapture = null;
+      _mealAfterCandidateCapture = null;
     }
+    if (_lastEatingState == EatingSessionState.afterCandidateReady &&
+        snapshot.state == EatingSessionState.idle &&
+        _mealAfterCandidateCapture != null) {
+      _promoteMealAfterCandidate();
+    }
+    if (snapshot.state == EatingSessionState.eating &&
+        _lastEatingState != EatingSessionState.eating) {
+      _autoMealEndDetector.start(DateTime.now());
+      _frameStabilityTracker.reset();
+      _autoMealMessage = '进餐中，等待自动结束候选';
+    }
+    if (snapshot.state == EatingSessionState.idle) {
+      _autoMealEndDetector.reset();
+      _frameStabilityTracker.reset();
+      _autoMealMessage = '等待自动进餐';
+    }
+    _lastEatingState = snapshot.state;
     _error = snapshot.errorMessage;
     _serverMessage = switch (snapshot.state) {
       EatingSessionState.idle =>
@@ -533,6 +787,8 @@ class GlassReceiverService extends ChangeNotifier {
             : '进食 Session 未开始：' + snapshot.errorMessage!,
       EatingSessionState.starting => '进食即将开始，等待餐前高清抓拍',
       EatingSessionState.eating => '进食 Session 进行中，等待握拳结束',
+      EatingSessionState.afterCandidateCapturing => '正在生成餐后候选图片',
+      EatingSessionState.afterCandidateReady => '餐后候选已生成，请确认或继续进食',
       EatingSessionState.ending => '进食即将结束，等待餐后高清抓拍',
     };
     notifyListeners();
@@ -834,16 +1090,20 @@ class GlassReceiverService extends ChangeNotifier {
       );
       await imageFile.writeAsBytes(imageBytes, flush: true);
 
-      final capture = GlassCapture(
-        imageFile: imageFile,
-        metadata: metadata,
-        receivedAt: DateTime.now(),
-      );
       final activeIntent = _captureCoordinator.activeIntent;
       final quality = await _evaluateCaptureQuality(
         imageBytes,
         metadata,
         activeIntent,
+      );
+      final captureMetadata = <String, dynamic>{
+        ...metadata,
+        '_qualityAccepted': quality.accepted,
+      };
+      final capture = GlassCapture(
+        imageFile: imageFile,
+        metadata: captureMetadata,
+        receivedAt: DateTime.now(),
       );
       final acknowledged = _captureCoordinator.acknowledge(
         CaptureAcknowledgement(
@@ -861,6 +1121,13 @@ class GlassReceiverService extends ChangeNotifier {
           _mealDuringCaptures.add(capture);
         } else if (metadata['scene']?.toString() == 'meal_after') {
           _mealAfterCapture = capture;
+          // A user override may have allowed an already-dispatched automatic
+          // candidate to finish before this critical meal-after capture.
+          // Once the formal image is accepted, the old candidate is no longer
+          // actionable and must not remain visible as a pending confirmation.
+          _mealAfterCandidateCapture = null;
+        } else if (metadata['scene']?.toString() == 'meal_after_candidate') {
+          _mealAfterCandidateCapture = capture;
         }
         if (activeIntent?.isAutomaticOrigin == true &&
             activeIntent?.captureType == CaptureType.food) {
@@ -874,7 +1141,36 @@ class GlassReceiverService extends ChangeNotifier {
                 : '已收到眼镜抓拍图片，但质量检查未通过'
           : '已收到眼镜抓拍图片';
       _error = null;
-      _captureController.add(capture);
+      final isPackaging =
+          metadata['type'] == 'packaging' ||
+          metadata['scene'] == 'ingredient_label';
+      if (isPackaging && (!quality.accepted || !acknowledged)) {
+        _serverMessage = quality.accepted
+            ? '忽略过期包装任务，未调用 OCR'
+            : '包装图片质量不足，等待队列重拍';
+        unawaited(
+          sendAnalysisStatus(
+            status: 'error',
+            title: '拍摄未通过',
+            message: '请保持包装稳定，等待重拍',
+            captureTaskId: captureTaskId,
+          ),
+        );
+      } else {
+        if (isPackaging && _packagingProfile != null) {
+          // The receiver owns the task; closing the result page cannot cancel OCR.
+          unawaited(
+            analyzePackagingCapture(capture, _packagingProfile!).then<void>(
+              (_) {},
+              onError: (Object error) {
+                _error = '包装 OCR 失败：$error';
+                notifyListeners();
+              },
+            ),
+          );
+        }
+        _captureController.add(capture);
+      }
       notifyListeners();
 
       // Commit after all side effects, before response I/O, so a disconnected
@@ -896,17 +1192,27 @@ class GlassReceiverService extends ChangeNotifier {
     Map<String, dynamic> metadata,
     CaptureIntent? activeIntent,
   ) async {
-    if (activeIntent == null) return const CaptureQualityResult.accepted();
+    final scene = metadata['scene']?.toString();
+    final isPackaging =
+        scene == 'ingredient_label' || metadata['type'] == 'packaging';
+    if (isPackaging &&
+        metadata['captureSource']?.toString() != 'high_res_jpeg') {
+      return const CaptureQualityResult.rejected([
+        CaptureQualityIssue.lowResolution,
+      ], shouldRetake: true);
+    }
+    if (activeIntent == null && !isPackaging)
+      return const CaptureQualityResult.accepted();
     final metrics = await _measureCaptureImage(imageBytes);
     final fingerprint = _fingerprint(imageBytes);
     final isAutomaticFood =
-        activeIntent.isAutomaticOrigin &&
-        activeIntent.captureType == CaptureType.food;
+        activeIntent?.isAutomaticOrigin == true &&
+        activeIntent?.captureType == CaptureType.food;
     return _qualityEvaluator.evaluate(
       CaptureQualityInput(
         isJpeg: metrics.isDecodableJpeg,
-        width: _metadataInt(metadata['width']) ?? metrics.width,
-        height: _metadataInt(metadata['height']) ?? metrics.height,
+        width: metrics.width,
+        height: metrics.height,
         brightness: metrics.brightness,
         sharpness: metrics.sharpness,
         isDuplicate:
@@ -915,15 +1221,18 @@ class GlassReceiverService extends ChangeNotifier {
         // automatic intent is submitted, so it must not be fabricated here.
         foodRelevance: null,
       ),
-      activeIntent.qualityPolicy,
+      activeIntent?.qualityPolicy ??
+          CaptureQualityPolicy.forScene('ingredient_label'),
     );
   }
 
   Future<_CaptureImageMetrics> _measureCaptureImage(
     Uint8List imageBytes,
   ) async {
+    ui.Image? decodedImage;
     try {
       final image = await _decodeImage(imageBytes);
+      decodedImage = image;
       final rgba = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
       if (rgba == null) {
         return _CaptureImageMetrics.invalid(image.width, image.height);
@@ -968,18 +1277,18 @@ class GlassReceiverService extends ChangeNotifier {
       );
     } catch (_) {
       return _CaptureImageMetrics.invalid(0, 0);
+    } finally {
+      decodedImage?.dispose();
     }
   }
 
-  int? _metadataInt(Object? value) {
-    if (value is num) return value.round();
-    return int.tryParse(value?.toString() ?? '');
-  }
-
-  Future<ui.Image> _decodeImage(Uint8List imageBytes) {
-    final completer = Completer<ui.Image>();
-    ui.decodeImageFromList(imageBytes, completer.complete);
-    return completer.future;
+  Future<ui.Image> _decodeImage(Uint8List imageBytes) async {
+    final codec = await ui.instantiateImageCodec(imageBytes);
+    try {
+      return (await codec.getNextFrame()).image;
+    } finally {
+      codec.dispose();
+    }
   }
 
   String _fingerprint(Uint8List bytes) {
@@ -1085,8 +1394,32 @@ class GlassReceiverService extends ChangeNotifier {
       }
 
       final raw = await PhoneSceneClassifier.classifyJpeg(imageBytes);
+      FoodSceneResult? food;
+      FrameStabilitySnapshot? stability;
+      if (!_foodModelFailureLatched) {
+        try {
+          food = await _foodSceneClassifier.classify(imageBytes);
+          _foodProbability = food.foodProbability;
+          _foodModelAvailable = true;
+          _foodModelMessage =
+              '食品模型已加载（${_foodSceneClassifier.runtimeDescription}）';
+          stability = await _frameStabilityTracker.observe(imageBytes);
+        } catch (error) {
+          _foodModelAvailable = false;
+          _foodModelFailureLatched = true;
+          _foodModelMessage = '食品模型不可用：$error';
+        }
+      }
       _sceneFrameCount += 1;
       _applySceneClassification(raw);
+      if (food != null) {
+        _applyFoodClassification(
+          food,
+          raw,
+          frameStable: stability?.stable ?? false,
+          frameFingerprint: _fingerprint(imageBytes),
+        );
+      }
       notifyListeners();
       await _json(request, HttpStatus.ok, {
         'accepted': true,
@@ -1096,6 +1429,10 @@ class GlassReceiverService extends ChangeNotifier {
         'confidence': raw.confidence,
         'stableScene': _sceneClassification.mode.name,
         'candidateHits': _sceneCandidateHits,
+        'foodProbability': food?.foodProbability,
+        'foodScene': food?.isFoodScene,
+        'stableFoodHits': _autoCandidateTracker.consecutiveFoodHits,
+        'autoState': _eatingSessionController.state.name,
       });
     } finally {
       _classifyingSceneFrame = false;
@@ -1131,6 +1468,59 @@ class GlassReceiverService extends ChangeNotifier {
     }
   }
 
+  void _applyFoodClassification(
+    FoodSceneResult food,
+    PhoneSceneClassification gesture, {
+    required bool frameStable,
+    required String frameFingerprint,
+  }) {
+    final mode = _captureModeController.mode;
+    final automaticEnabled = mode != CaptureMode.manual;
+    if (!automaticEnabled || !_automaticCapturesAllowed) {
+      _autoMealMessage = mode == CaptureMode.manual
+          ? '手动模式：食品模型仅显示，不自动拍摄'
+          : '自动拍摄暂时暂停';
+      return;
+    }
+
+    final now = DateTime.now();
+    final state = _eatingSessionController.state;
+    if (state == EatingSessionState.idle) {
+      final decision = _autoCandidateTracker.observe(
+        food,
+        now: now,
+        frameFingerprint: frameFingerprint,
+      );
+      _autoMealMessage = decision.eligible ? '食品场景稳定，准备拍摄餐前图' : '等待连续食品场景候选';
+      if (decision.eligible) {
+        _autoCandidateTracker.markAccepted(now, frameFingerprint);
+        unawaited(_eatingSessionController.startAutomaticSession());
+      }
+      return;
+    }
+
+    if (state == EatingSessionState.afterCandidateReady &&
+        (_autoMealEndDetector.isCandidateExpired(now) ||
+            (food.isFoodScene && gesture.hands > 0))) {
+      cancelMealAfterCandidate();
+      return;
+    }
+
+    if (state != EatingSessionState.eating) return;
+    final decision = _autoMealEndDetector.observe(
+      now: now,
+      food: food,
+      hands: gesture.hands,
+      frameStable: frameStable,
+    );
+    _autoNoHandFrames = decision.noHandFrames;
+    _autoStableFrames = decision.stableFrames;
+    _autoMealMessage = decision.message;
+    if (decision.candidateReady) {
+      unawaited(_eatingSessionController.requestAutomaticAfterCandidate());
+    }
+  }
+
   Future<void> _sendAutomaticPackagingCapture() async {
     var sent = false;
     try {
@@ -1138,7 +1528,7 @@ class GlassReceiverService extends ChangeNotifier {
         trigger: 'phone_ok_gesture',
         delay: const Duration(seconds: 2),
         allowAutomaticRetake: true,
-        source: CaptureIntentSource.automatic,
+        source: CaptureIntentSource.manual,
       );
       sent = result.accepted;
     } finally {
@@ -1229,15 +1619,40 @@ class GlassReceiverService extends ChangeNotifier {
       channel.onDataChannelState = (state) {
         _log('dataChannelState=$state');
         _controlReady = state == RTCDataChannelState.RTCDataChannelOpen;
+        if (_controlReady) unawaited(_flushAnalysisMessages());
         if (!_controlReady) _eatingSessionController.onConnectionLost();
         notifyListeners();
       };
       channel.onMessage = (message) {
         if (!message.isBinary) {
+          try {
+            final data = jsonDecode(message.text);
+            if (data is Map && data['type'] == 'capture_error') {
+              final ack = CaptureAcknowledgement(
+                taskId: data['captureTaskId']?.toString(),
+                captureType: CaptureType.fromWireValue(data['captureType']),
+                scene: data['scene']?.toString() ?? '',
+                mealSessionId: data['mealSessionId']?.toString(),
+              );
+              final handled = _captureCoordinator.acknowledge(
+                ack,
+                const CaptureQualityResult.rejected([
+                  CaptureQualityIssue.captureFailed,
+                ], shouldRetake: true),
+              );
+              if (handled) _error = '高清抓拍失败：${data['message']}';
+              notifyListeners();
+              return;
+            }
+          } on FormatException {
+            /* Ignore malformed control messages. */
+          }
           _serverMessage = '眼镜控制通道：${message.text}';
           notifyListeners();
         }
       };
+      _controlReady = channel.state == RTCDataChannelState.RTCDataChannelOpen;
+      if (_controlReady) unawaited(_flushAnalysisMessages());
     };
 
     final acceptedRemoteCandidates = _filterCandidatesForPrefix(
@@ -1312,13 +1727,11 @@ class GlassReceiverService extends ChangeNotifier {
         _fallbackRemoteStream = fallback;
         stream = fallback;
       }
-      _remoteVideoReady = true;
       _stopGlassesDiscoveryLoop();
       _remoteStreamController.add(stream);
-      _serverMessage = '实时视频轨道已接入';
-      _glassesMessage = _glassesIp == null
-          ? '眼镜已接入实时视频。'
-          : '眼镜 $_glassesIp 已接入实时视频。';
+      // A negotiated track can exist before ICE connects or any frame arrives.
+      // Only decoded video in _pollStats may mark the preview as ready.
+      _serverMessage = '视频轨道已协商，等待首帧';
       notifyListeners();
     } catch (error) {
       _error = '远端视频轨道接入失败：$error';
@@ -1391,36 +1804,18 @@ class GlassReceiverService extends ChangeNotifier {
   }
 
   String _filterSdpCandidateLines(String sdp, String prefix) {
-    final lines = sdp.split(RegExp(r'\r?\n'));
-    final candidateLines = lines
-        .where((line) => line.startsWith('a=candidate:'))
-        .toList(growable: false);
-    final matchingCandidateLines = candidateLines
-        .where((line) => line.contains(' $prefix'))
-        .toSet();
-    if (candidateLines.isEmpty || matchingCandidateLines.isEmpty) {
-      return sdp;
-    }
-    return lines
-        .where(
-          (line) =>
-              !line.startsWith('a=candidate:') ||
-              matchingCandidateLines.contains(line),
-        )
-        .join('\r\n');
+    return LanIcePolicy.filterSdp(sdp, prefix);
   }
 
   List<RTCIceCandidate> _filterCandidatesForPrefix(
     List<RTCIceCandidate> candidates,
     String? prefix,
   ) {
-    if (prefix == null) return candidates;
-    final filtered = candidates
-        .where(
-          (candidate) => candidate.candidate?.contains(' $prefix') ?? false,
-        )
-        .toList(growable: false);
-    return filtered.isEmpty ? candidates : filtered;
+    final selected = LanIcePolicy.select(
+      candidates.map((c) => c.candidate ?? '').toList(),
+      prefix,
+    ).toSet();
+    return candidates.where((c) => selected.contains(c.candidate)).toList();
   }
 
   String? _ipv4Prefix(String? ip) {
@@ -1490,6 +1885,7 @@ class GlassReceiverService extends ChangeNotifier {
     if (peer == null) return;
     try {
       final reports = await peer.getStats();
+      if (!identical(peer, _peerConnection)) return;
       for (final report in reports) {
         final values = report.values;
         final type = report.type.toLowerCase();
@@ -1500,6 +1896,14 @@ class GlassReceiverService extends ChangeNotifier {
         final bytes = _asInt(values['bytesReceived']);
         final fps = _asDouble(values['framesPerSecond']);
         final framesDecoded = _asInt(values['framesDecoded']);
+        if (!_remoteVideoReady && framesDecoded != null && framesDecoded > 0) {
+          _remoteVideoReady = true;
+          _stopGlassesDiscoveryLoop();
+          _serverMessage = '已收到眼镜实时画面';
+          _glassesMessage = _glassesIp == null
+              ? '眼镜已接入实时视频。'
+              : '眼镜 $_glassesIp 已接入实时视频。';
+        }
         final now = DateTime.now();
         double? kbps;
         if (bytes != null &&

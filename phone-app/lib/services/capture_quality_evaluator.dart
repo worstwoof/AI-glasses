@@ -1,6 +1,7 @@
 import 'capture_intent.dart';
 
 enum CaptureQualityIssue {
+  captureFailed,
   invalidJpeg,
   lowResolution,
   tooDark,

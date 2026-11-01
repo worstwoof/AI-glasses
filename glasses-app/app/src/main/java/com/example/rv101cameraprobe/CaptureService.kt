@@ -34,13 +34,14 @@ class CaptureService : Service(),
     private var previewPublisher: WebRtcPreviewPublisher? = null
     private var previewFrameReporter: PreviewFrameReporter? = null
     private var controlServer: GlassesControlServer? = null
-    private var voiceAnnouncer: VoiceAnnouncer? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var running = false
     private var cooldownUntilMs = 0L
     private val captureRequestTracker = CaptureRequestTracker()
     private var uploadMessage = "Photo saved"
     private var startupRunnable: Runnable? = null
+    private var displayExpiryRunnable: Runnable? = null
+    private val displayedResults = mutableSetOf<String>()
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -118,7 +119,6 @@ class CaptureService : Service(),
         startInForeground(cameraActive = true)
         acquireWakeLock()
         publish(CaptureStatus(state = CaptureState.STARTING, message = "Starting foreground camera service"))
-        voiceAnnouncer = VoiceAnnouncer(applicationContext)
         startupRunnable = Runnable {
             if (!running) return@Runnable
             startCameraPipeline()
@@ -132,21 +132,20 @@ class CaptureService : Service(),
             controller == null &&
             previewPublisher == null &&
             previewFrameReporter == null &&
-            voiceAnnouncer == null
+            displayExpiryRunnable == null
         ) {
             return
         }
         running = false
         mainHandler.removeCallbacksAndMessages(null)
         startupRunnable = null
+        displayExpiryRunnable = null
         controller?.stop()
         controller = null
         previewPublisher?.stop()
         previewPublisher = null
         previewFrameReporter?.close()
         previewFrameReporter = null
-        voiceAnnouncer?.close()
-        voiceAnnouncer = null
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         clearPendingCapture()
@@ -267,13 +266,14 @@ class CaptureService : Service(),
         )
         val cooldownMs = pendingCapture.cooldownMs
         uploadMessage = "Photo saved; uploading to phone"
-        voiceAnnouncer?.speak("图片已保存，正在上传到手机")
         beginCooldown(path, cooldownMs)
         PhotoUploader.uploadCapture(applicationContext, java.io.File(path), uploadMetadata) { result ->
             mainHandler.post {
                 if (!running) return@post
                 uploadMessage = result.message
-                voiceAnnouncer?.speak(if (result.success) "图片已上传到手机" else "图片已保存，上传失败")
+                if (!result.success) {
+                    previewPublisher?.sendCaptureFailure(uploadMetadata, result.message)
+                }
                 val remaining = cooldownUntilMs - System.currentTimeMillis()
                 publish(status.copy(
                     state = if (remaining > 0) CaptureState.COOLDOWN else CaptureState.DETECTING,
@@ -290,11 +290,83 @@ class CaptureService : Service(),
     }
 
     override fun onPhotoError(message: String) {
-        clearPendingCapture()
-        publish(status.copy(state = CaptureState.ERROR, message = message))
-        mainHandler.postDelayed({
-            if (running) publish(status.copy(state = CaptureState.DETECTING, message = "Detection resumed after capture error"))
-        }, 1_000)
+        val failed = captureRequestTracker.take()
+        mainHandler.post {
+            failed?.let { previewPublisher?.sendCaptureFailure(it.metadata, message) }
+            publish(status.copy(state = CaptureState.ERROR, message = message,
+                display = GlassesDisplayState(mode = "error", title = "拍摄失败",
+                    lines = listOf("请保持稳定，等待手机重试"), severity = GlassesDisplaySeverity.ERROR)))
+        }
+    }
+
+    override fun onPhoneAnalysisMessage(message: JSONObject) {
+        mainHandler.post {
+            if (!running) return@post
+            if (message.optString("analysisType") != "packaging_ocr") return@post
+            val type = message.optString("type")
+            val statusValue = message.optString("status")
+            val taskId = message.optString("captureTaskId")
+            if (type == "analysis_result" && taskId.isNotEmpty()) {
+                if (!displayedResults.add(taskId)) return@post
+                if (displayedResults.size > 128) displayedResults.remove(displayedResults.first())
+            }
+            val display = when {
+                type == "analysis_status" && statusValue == "analyzing" -> GlassesDisplayState(
+                    mode = "analyzing",
+                    title = "正在识别配料表",
+                    lines = listOf("请稍候"),
+                )
+                type == "analysis_result" && statusValue == "completed" -> GlassesDisplayState(
+                    mode = "result",
+                    title = "识别完成",
+                    lines = readDisplayLines(message),
+                    severity = if ((message.optJSONArray("allergens")?.length() ?: 0) > 0) {
+                        GlassesDisplaySeverity.ERROR
+                    } else if (message.optString("severity") == "warning") {
+                        GlassesDisplaySeverity.WARNING
+                    } else {
+                        GlassesDisplaySeverity.SUCCESS
+                    },
+                    expiresAtMs = System.currentTimeMillis() + message.optLong("displayDurationMs", 6_000L).coerceIn(2_000L, 10_000L),
+                )
+                type == "analysis_status" && statusValue == "error" -> GlassesDisplayState(
+                    mode = "error",
+                    title = "识别失败",
+                    lines = listOf(sanitizeDisplayText(message.optString("message").ifBlank { "请正对配料表重新拍摄" })),
+                    severity = GlassesDisplaySeverity.ERROR,
+                    expiresAtMs = System.currentTimeMillis() + 6_000L,
+                )
+                else -> return@post
+            }
+            displayExpiryRunnable?.let(mainHandler::removeCallbacks)
+            displayExpiryRunnable = null
+            DebugStatus.write(this, "Analysis.display mode=${display.mode} task=${taskId.take(80)} lines=${display.lines.size}")
+            publish(status.copy(display = display))
+            if (display.expiresAtMs > 0L) {
+                displayExpiryRunnable = Runnable {
+                    if (running) publish(status.copy(display = GlassesDisplayState()))
+                }.also { mainHandler.postDelayed(it, display.expiresAtMs - System.currentTimeMillis()) }
+            }
+        }
+    }
+
+    private fun readDisplayLines(message: JSONObject): List<String> {
+        val lines = message.optJSONArray("displayLines")?.let { array ->
+            (0 until array.length()).mapNotNull { index ->
+                array.optString(index).trim().takeIf { it.isNotEmpty() }
+            }
+        }.orEmpty()
+        return lines.ifEmpty {
+            listOf(
+                "商品：${message.optString("productName").ifBlank { "未识别" }}",
+                "过敏原：${if ((message.optJSONArray("allergens")?.length() ?: 0) > 0) "请查看手机" else "未发现档案匹配项"}",
+                "提示：${message.optString("riskSummary").ifBlank { "详见手机端分析" }}",
+            )
+        }.take(3).map(::sanitizeDisplayText)
+    }
+
+    private fun sanitizeDisplayText(text: String): String = text.replace(Regex("\\s+"), " ").trim().let {
+        if (it.length > 22) it.take(21) + "…" else it
     }
 
     override fun onPreviewStatus(status: PreviewConnectionStatus) {
@@ -439,14 +511,18 @@ class CaptureService : Service(),
             publish(nextStatus.copy(state = CaptureState.CAPTURING, message = "A JPEG capture is already in progress"))
             return
         }
-        if (controller?.captureStill() == true) {
-            if (metadata.trigger == "app_button") {
-                voiceAnnouncer?.speak("手机端请求拍照")
-            }
-            publish(nextStatus.copy(state = CaptureState.CAPTURING, message = message))
+        val strictHighResolution = metadata.captureType == CaptureType.PACKAGING || metadata.scene == "ingredient_label"
+        displayExpiryRunnable?.let(mainHandler::removeCallbacks)
+        publish(status.copy(display = GlassesDisplayState()))
+        if (controller?.captureStill(allowPreviewFallback = !strictHighResolution) == true) {
+            publish(status.copy(state = CaptureState.CAPTURING, message = message))
         } else {
-            captureRequestTracker.clear()
-            publish(nextStatus.copy(state = CaptureState.ERROR, message = "Camera is not ready for JPEG capture"))
+            if (strictHighResolution) {
+                onPhotoError("High-resolution JPEG is not ready")
+            } else {
+                captureRequestTracker.clear()
+                publish(nextStatus.copy(state = CaptureState.ERROR, message = "Camera is not ready for JPEG capture"))
+            }
         }
     }
 

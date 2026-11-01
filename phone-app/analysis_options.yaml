@@ -8,3 +8,5 @@ analyzer:
     - lib/recognition_page_pro.dart
     - lib/ingredient_label_page_pro.dart
     - lib/profile_edit_page.dart
+    - build/**
+    - android/**

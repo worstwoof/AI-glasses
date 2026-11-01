@@ -66,34 +66,45 @@ POST http://<手机IP>:8080/api/v1/scene/frames
 X-Device-Token: <配对令牌>
 ```
 
-手机 App 在 Android 原生层运行本地 MediaPipe 模型，连续两帧确认后切换粗场景：
+手机 App 在 Android 原生层运行 MediaPipe 手势识别和内置 TFLite 食品二分类。两者使用同一张低频 JPEG；食品概率达到 `0.80` 且连续两帧命中后，才允许自动生成餐前抓拍任务：
 
 - OK 手势：`ingredient_label`，进入“配料表识别模式”准备状态。
-- 张开手掌：`eating`，进入“进餐环境/无感记录”准备状态。
-- 其他画面：`unknown`，保持等待。
+- 张开手掌：手动或混合模式下连续两次命中，提交 `meal_before`。
+- 握拳：连续两次命中，提交 `meal_after`；如果自动餐后候选已经生成，则直接确认候选，不重复拍摄。
+- 食品概率 `>= 0.80`：`food_scene`，自动或混合模式下可开始餐前采集。
+- 其他画面：`not_food_scene`，自动餐前触发计数清零。
 
-当前版本只做粗分类和页面状态提示，不会自动调用 OCR、自动计算热量或直接写入饮食记录。高清 JPEG 仍由手机端“眼镜抓拍”按钮触发，后续再根据场景模式接入配料表 OCR 或餐食 AI 分析。
+采集模式有三种：手动模式只由手势和 App 按钮触发；自动模式由食品二分类启动餐前采集，并在进餐至少 3 分钟、连续无手且画面稳定时生成 `meal_after_candidate`；混合模式同时启用两条链路，明确手势优先。第一版不自动拍摄 `meal_during`。自动餐后候选需要用户握拳或点击“确认餐后”才会提升为正式 `meal_after`，也可以点击“继续进食”取消。
 
-## AI 识图配置
+包装 OCR 始终显式触发：OK 手势或 App 包装抓拍按钮 -> `ingredient_label` 高清图片 -> 千问视觉 OCR -> 本地营养成分解析和过敏风险判断。食品二分类不会触发包装 OCR。
 
-当前代码支持通过 `--dart-define` 配置一个 OpenAI 兼容的视觉接口：
+模型输入输出约定和局限见 [FOOD_PRESENCE_MODEL.md](FOOD_PRESENCE_MODEL.md)。
 
-```bash
-flutter run --dart-define=AI_API_KEY=你的Key
+## 千问 AI 配置
+
+食品识别、营养分析和包装 OCR 默认使用阿里云百炼的 `qwen3.8-flash`。API Key 只通过本机环境变量传入，不要写入源码或提交到 GitHub。
+
+PowerShell 构建示例：
+
+```powershell
+$env:QWEN_API_KEY = "新创建的API Key"
+$env:QWEN_API_URL = "https://ws-xx2967i3d388t86v.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+D:\flutter\bin\flutter.bat build apk --debug `
+  --dart-define="AI_API_KEY=$env:QWEN_API_KEY" `
+  --dart-define="AI_API_URL=$env:QWEN_API_URL" `
+  --dart-define="AI_VISION_MODEL=qwen3.8-flash" `
+  --dart-define="AI_TEXT_MODEL=qwen3.8-flash" `
+  --dart-define="AI_OCR_MODEL=qwen3.8-flash"
 ```
 
-可选参数：
+也可以使用 `flutter run`，参数保持一致。未配置 `AI_API_KEY` 时，食品识别会退回本地演示数据，包装 OCR 会提示缺少 API Key。
 
-```bash
-flutter run ^
-  --dart-define=AI_API_KEY=你的Key ^
-  --dart-define=AI_API_URL=https://你的接口地址/v1/chat/completions ^
-  --dart-define=AI_VISION_MODEL=Doubao-Seed-2.0-mini
-```
+当前包装 OCR 直接把图片发送给千问视觉接口，返回的文字会继续进入本地营养成分解析、过敏原识别和风险评估流程。
 
-如果不额外传 `AI_VISION_MODEL`，拍照识别默认会使用 `Doubao-Seed-2.0-mini`。
+“健康分析”页现在是千问饮食顾问对话页。它会在每次提问前自动整理个人档案、今日饮食汇总、近 14 天饮食记录和最近一次识别结果，发送给千问生成解释与建议；对话只读，不会自动修改饮食记录。对话记录最多保留 50 条，单次请求只发送最近 12 条历史消息。未配置 API Key 或请求失败时，页面会显示明确错误，不生成虚假的个性化分析。
 
-如果没有配置 `AI_API_KEY`，应用会自动退回到本地演示识别模式。
+正式发布时应改为由后端代理调用千问，避免 API Key 被打包进 APK 后泄露。
 
 ## Eating Session Hardware Validation
 

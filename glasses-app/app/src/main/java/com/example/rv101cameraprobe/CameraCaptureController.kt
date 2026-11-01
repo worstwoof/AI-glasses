@@ -52,6 +52,7 @@ class CameraCaptureController(
     private var retryScheduled = false
     private var openGeneration = 0L
     private var photoCaptureInFlight = false
+    private var strictPhotoCapture = false
     private var fallbackPending = false
     private var highResolutionEnabled = true
     private var previewFallbackAfterRestore: String? = null
@@ -65,7 +66,13 @@ class CameraCaptureController(
     private val photoTimeoutRunnable = Runnable {
         if (photoCaptureInFlight) {
             photoCaptureInFlight = false
-            restorePreviewSession("High-resolution JPEG timed out; saving preview fallback")
+            if (strictPhotoCapture) {
+                strictPhotoCapture = false
+                callback.onPhotoError("High-resolution JPEG timed out; no preview fallback was saved")
+                restorePreviewSession()
+            } else {
+                restorePreviewSession("High-resolution JPEG timed out; saving preview fallback")
+            }
         }
     }
     private val fallbackTimeoutRunnable = Runnable {
@@ -125,20 +132,35 @@ class CameraCaptureController(
         }
     }
 
-    fun captureStill(): Boolean {
+    fun captureStill(allowPreviewFallback: Boolean = true): Boolean {
         if (!active || yuvReader == null || fallbackPending || photoCaptureInFlight) return false
         val camera = cameraDevice
         val jpegSurface = jpegReader?.surface
-        if (camera == null || captureSession == null || jpegSurface == null) return startPreviewFallback()
+        strictPhotoCapture = !allowPreviewFallback
+        if (camera == null || captureSession == null || jpegSurface == null) {
+            return if (allowPreviewFallback) startPreviewFallback() else {
+                strictPhotoCapture = false
+                false
+            }
+        }
         return try {
             photoCaptureInFlight = true
+            cameraHandler?.removeCallbacks(photoTimeoutRunnable)
+            cameraHandler?.postDelayed(photoTimeoutRunnable, HIGH_RES_JPEG_TIMEOUT_MS)
             callback.onPhotoFallback("Capturing ${photoSize?.width}x${photoSize?.height} JPEG")
             switchToStillSession(camera, jpegSurface)
             true
-        } catch (error: CameraAccessException) {
+        } catch (error: Exception) {
             photoCaptureInFlight = false
-            requestPreviewFallback("High-resolution JPEG unavailable; saving preview fallback")
-            true
+            cameraHandler?.removeCallbacks(photoTimeoutRunnable)
+            if (allowPreviewFallback) {
+                requestPreviewFallback("High-resolution JPEG unavailable; saving preview fallback")
+                true
+            } else {
+                strictPhotoCapture = false
+                restorePreviewSession()
+                false
+            }
         }
     }
 
@@ -157,7 +179,7 @@ class CameraCaptureController(
                 return
             }
             val photo = if (highResolutionEnabled) {
-                selectOutputSize(id, ImageFormat.JPEG, HIGH_RESOLUTION_TARGET) ?: run {
+                selectHighestJpegSize(id) ?: run {
                     callback.onCameraError("Camera has no JPEG output")
                     return
                 }
@@ -298,6 +320,7 @@ class CameraCaptureController(
         jpegReader = null
         opening = false
         photoCaptureInFlight = false
+        strictPhotoCapture = false
         cameraHandler?.removeCallbacks(photoTimeoutRunnable)
         fallbackPending = false
         previewFallbackAfterRestore = null
@@ -305,6 +328,10 @@ class CameraCaptureController(
     }
 
     private fun requestPreviewFallback(message: String) {
+        if (strictPhotoCapture) {
+            callback.onPhotoError("Strict JPEG capture rejected preview fallback")
+            return
+        }
         fallbackPending = true
         callback.onPhotoFallback(message)
         resumeRepeating()
@@ -332,7 +359,6 @@ class CameraCaptureController(
             override fun onConfigured(session: CameraCaptureSession) {
                 if (!active || !photoCaptureInFlight) {
                     session.close()
-                    restorePreviewSession()
                     return
                 }
                 captureSession = session
@@ -348,24 +374,35 @@ class CameraCaptureController(
                             request: CaptureRequest,
                             failure: android.hardware.camera2.CaptureFailure,
                         ) {
-                            photoCaptureInFlight = false
-                            cameraHandler?.removeCallbacks(photoTimeoutRunnable)
-                            restorePreviewSession("High-resolution JPEG capture failed; saving preview fallback")
+                            handleStillFailure("High-resolution JPEG capture failed", allowPreviewFallback = !strictPhotoCapture)
                         }
                     }, cameraHandler)
                     cameraHandler?.removeCallbacks(photoTimeoutRunnable)
                     cameraHandler?.postDelayed(photoTimeoutRunnable, HIGH_RES_JPEG_TIMEOUT_MS)
-                } catch (error: CameraAccessException) {
-                    photoCaptureInFlight = false
-                    restorePreviewSession("High-resolution JPEG unavailable; saving preview fallback")
+                } catch (error: Exception) {
+                    handleStillFailure("High-resolution JPEG unavailable: ${error.message ?: "camera access failed"}", allowPreviewFallback = !strictPhotoCapture)
                 }
             }
 
             override fun onConfigureFailed(session: CameraCaptureSession) {
-                photoCaptureInFlight = false
-                restorePreviewSession("High-resolution JPEG session failed; saving preview fallback")
+                session.close()
+                if (!photoCaptureInFlight) return
+                handleStillFailure("High-resolution JPEG session configuration failed", allowPreviewFallback = !strictPhotoCapture)
             }
         }, cameraHandler)
+    }
+
+    private fun handleStillFailure(message: String, allowPreviewFallback: Boolean) {
+        photoCaptureInFlight = false
+        cameraHandler?.removeCallbacks(photoTimeoutRunnable)
+        if (allowPreviewFallback) {
+            strictPhotoCapture = false
+            restorePreviewSession("$message; saving preview fallback")
+        } else {
+            strictPhotoCapture = false
+            callback.onPhotoError("$message; no preview fallback was saved")
+            restorePreviewSession()
+        }
     }
 
     private fun restorePreviewSession(fallbackMessage: String? = null) {
@@ -378,6 +415,7 @@ class CameraCaptureController(
 
     private fun saveHighResolutionJpeg(image: android.media.Image) {
         photoCaptureInFlight = false
+        strictPhotoCapture = false
         cameraHandler?.removeCallbacks(photoTimeoutRunnable)
         val bytes = ByteArray(image.planes[0].buffer.remaining()).also { image.planes[0].buffer.get(it) }
         restorePreviewSession()
@@ -451,6 +489,22 @@ class CameraCaptureController(
         }
     }
 
+    private fun selectHighestJpegSize(cameraId: String): Size? {
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return null
+        val sizes = (map.getOutputSizes(ImageFormat.JPEG).orEmpty().toList() +
+            map.getHighResolutionOutputSizes(ImageFormat.JPEG).orEmpty().toList()).distinct()
+        val sensorSize = sizes.maxByOrNull { it.width.toLong() * it.height.toLong() } ?: return null
+        val preferredAspect = sensorSize.width.toDouble() / sensorSize.height
+        val selected = CameraOutputSizeSelector.selectHighestQuality(
+            supported = sizes.map { CaptureOutputSize(it.width, it.height) },
+            preferredAspectRatio = preferredAspect,
+        ) ?: return null
+        DebugStatus.write(appContext, "Camera.jpegSupported sizes=${sizes.joinToString()} selected=${selected.width}x${selected.height}")
+        return sizes.firstOrNull { it.width == selected.width && it.height == selected.height }
+    }
+
     private val availabilityCallback = object : CameraManager.AvailabilityCallback() {
         override fun onCameraAvailable(cameraId: String) {
             if (active && cameraDevice == null && !opening && !retryScheduled) {
@@ -497,7 +551,6 @@ class CameraCaptureController(
 
     companion object {
         private const val TAG = "CameraCaptureController"
-        private val HIGH_RESOLUTION_TARGET = Size(4032, 3024)
         private const val HIGH_RES_JPEG_TIMEOUT_MS = 8_000L
         private const val PREVIEW_FALLBACK_TIMEOUT_MS = 3_000L
     }

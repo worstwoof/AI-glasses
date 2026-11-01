@@ -92,6 +92,7 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   @override
   void initState() {
     super.initState();
+    _receiver.updatePackagingProfile(widget.profile);
     WidgetsBinding.instance.addObserver(this);
     _remoteRenderer = RTCVideoRenderer();
     _rendererReady = _remoteRenderer.initialize();
@@ -102,6 +103,12 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
     });
     _receiver.setAutomaticCapturesAllowed(true);
     unawaited(_receiver.start());
+  }
+
+  @override
+  void didUpdateWidget(covariant RecognitionPageFast oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _receiver.updatePackagingProfile(widget.profile);
   }
 
   @override
@@ -139,6 +146,12 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
   void _handleGlassCapture(GlassCapture capture) {
     if (!mounted) return;
     if (capture.captureType == CaptureType.packaging) {
+      if (!capture.qualityAccepted || capture.isLowResolutionFallback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('包装抓拍未达到高清要求，已拒绝 OCR，请重新做 OK 手势。')),
+        );
+        return;
+      }
       setState(() {
         // A packaging image must never become the food-analysis selection.
         _selectedImage = null;
@@ -427,8 +440,13 @@ class _RecognitionPageFastState extends State<RecognitionPageFast>
                       onResetToken: () => unawaited(_receiver.resetToken()),
                       onRequestCapture: _requestGlassCapture,
                       onRequestPackagingCapture: _requestPackagingCapture,
+                      onOpenPackagingAnalysis: _openPackagingAnalysis,
                       onCaptureModeChanged: _receiver.setCaptureMode,
                       onCancelEatingSession: _receiver.cancelEatingSession,
+                      onConfirmMealAfterCandidate:
+                          _receiver.confirmMealAfterCandidate,
+                      onCancelMealAfterCandidate:
+                          _receiver.cancelMealAfterCandidate,
                       onAnalyzeLatest: _analyzeImage,
                       onOpenSingleMode: () {
                         setState(() {
@@ -687,8 +705,11 @@ class _LivePreviewPane extends StatelessWidget {
     required this.onResetToken,
     required this.onRequestCapture,
     required this.onRequestPackagingCapture,
+    required this.onOpenPackagingAnalysis,
     required this.onCaptureModeChanged,
     required this.onCancelEatingSession,
+    required this.onConfirmMealAfterCandidate,
+    required this.onCancelMealAfterCandidate,
     required this.onAnalyzeLatest,
     required this.onOpenSingleMode,
   });
@@ -704,8 +725,11 @@ class _LivePreviewPane extends StatelessWidget {
   final VoidCallback onResetToken;
   final VoidCallback onRequestCapture;
   final VoidCallback onRequestPackagingCapture;
+  final ValueChanged<GlassCapture> onOpenPackagingAnalysis;
   final ValueChanged<CaptureMode> onCaptureModeChanged;
   final VoidCallback onCancelEatingSession;
+  final VoidCallback onConfirmMealAfterCandidate;
+  final VoidCallback onCancelMealAfterCandidate;
   final VoidCallback onAnalyzeLatest;
   final VoidCallback onOpenSingleMode;
 
@@ -746,6 +770,8 @@ class _LivePreviewPane extends StatelessWidget {
               EatingSessionDebugCard(
                 snapshot: snapshot,
                 onCancel: onCancelEatingSession,
+                onConfirmCandidate: onConfirmMealAfterCandidate,
+                onCancelCandidate: onCancelMealAfterCandidate,
               ),
               const SizedBox(height: 16),
               ClipRRect(
@@ -924,6 +950,13 @@ class _LivePreviewPane extends StatelessWidget {
         if (snapshot.lastCapture != null) ...[
           const SizedBox(height: 16),
           _LastCaptureCard(capture: snapshot.lastCapture!),
+          if (snapshot.lastCapture!.captureType == CaptureType.packaging &&
+              snapshot.lastCapture!.qualityAccepted)
+            TextButton.icon(
+              onPressed: () => onOpenPackagingAnalysis(snapshot.lastCapture!),
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('查看包装分析结果'),
+            ),
         ],
       ],
     );

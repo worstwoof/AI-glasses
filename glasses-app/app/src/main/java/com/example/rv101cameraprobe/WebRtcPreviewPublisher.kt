@@ -63,6 +63,7 @@ class WebRtcPreviewPublisher(
     interface Listener {
         fun onPreviewStatus(status: PreviewConnectionStatus)
         fun onPreviewCaptureRequested(request: GlassesCaptureRequest)
+        fun onPhoneAnalysisMessage(message: JSONObject)
     }
 
     private val appContext = context.applicationContext
@@ -97,6 +98,17 @@ class WebRtcPreviewPublisher(
         DebugStatus.write(appContext, "WebRtcPreviewPublisher.start")
         report(PreviewConnectionStatus("starting", "Starting WebRTC preview publisher"))
         executor.execute { connect() }
+    }
+
+    fun sendCaptureFailure(metadata: CaptureUploadMetadata, message: String) {
+        val channel = dataChannel ?: return
+        if (channel.state() != DataChannel.State.OPEN) return
+        val payload = JSONObject().put("type", "capture_error")
+            .put("captureTaskId", metadata.captureTaskId)
+            .put("captureType", metadata.captureType.wireValue)
+            .put("scene", metadata.scene).put("mealSessionId", metadata.mealSessionId)
+            .put("message", message.take(180)).toString()
+        runCatching { channel.send(DataChannel.Buffer(ByteBuffer.wrap(payload.toByteArray(Charsets.UTF_8)), false)) }
     }
 
     fun stop() {
@@ -370,17 +382,20 @@ class WebRtcPreviewPublisher(
             buffer.data.get(bytes)
             val text = String(bytes, StandardCharsets.UTF_8)
             val command = runCatching { JSONObject(text) }.getOrNull() ?: return
-            if (command.optString("type") == "capture") {
-                val request = GlassesCaptureRequest(
-                    captureType = CaptureType.fromWireValue(command.optString("captureType")),
-                    trigger = command.optString("trigger").trim().ifBlank { "app_button" },
-                    scene = command.optString("scene").trim().ifBlank { null },
-                    mealSessionId = command.optString("mealSessionId").trim().ifBlank { null },
-                    captureTaskId = command.optString("captureTaskId").trim().ifBlank { null },
-                    timestamp = command.optLong("timestamp", System.currentTimeMillis()),
-                )
-                listener.onPreviewCaptureRequested(request)
-                report(latestStatus.copy(message = "Phone requested ${request.captureType.wireValue} high-resolution capture"))
+            when (command.optString("type")) {
+                "capture" -> {
+                    val request = GlassesCaptureRequest(
+                        captureType = CaptureType.fromWireValue(command.optString("captureType")),
+                        trigger = command.optString("trigger").trim().ifBlank { "app_button" },
+                        scene = command.optString("scene").trim().ifBlank { null },
+                        mealSessionId = command.optString("mealSessionId").trim().ifBlank { null },
+                        captureTaskId = command.optString("captureTaskId").trim().ifBlank { null },
+                        timestamp = command.optLong("timestamp", System.currentTimeMillis()),
+                    )
+                    listener.onPreviewCaptureRequested(request)
+                    report(latestStatus.copy(message = "Phone requested ${request.captureType.wireValue} high-resolution capture"))
+                }
+                "analysis_status", "analysis_result" -> listener.onPhoneAnalysisMessage(command)
             }
         }
     }

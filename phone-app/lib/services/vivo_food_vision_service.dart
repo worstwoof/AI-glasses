@@ -7,19 +7,14 @@ import 'package:image_picker/image_picker.dart';
 
 import '../demo_data.dart';
 import '../models.dart';
+import 'ai_provider_config.dart';
 
 class VivoFoodVisionService {
   VivoFoodVisionService._();
 
-  static const String apiKey = String.fromEnvironment('AI_API_KEY');
-  static const String apiUrl = String.fromEnvironment(
-    'AI_API_URL',
-    defaultValue: 'https://api-ai.vivo.com.cn/v1/chat/completions',
-  );
-  static const String model = String.fromEnvironment(
-    'AI_VISION_MODEL',
-    defaultValue: 'Doubao-Seed-2.0-mini',
-  );
+  static const String apiKey = AiProviderConfig.apiKey;
+  static String get apiUrl => AiProviderConfig.chatCompletionsUrl;
+  static const String model = AiProviderConfig.visionModel;
 
   static bool get isConfigured => apiKey.trim().isNotEmpty;
 
@@ -34,9 +29,7 @@ class VivoFoodVisionService {
     final bytes = await image.readAsBytes();
     final base64Image = base64Encode(bytes);
     final requestId = _requestId();
-    final uri = Uri.parse(apiUrl).replace(
-      queryParameters: <String, String>{'request_id': requestId},
-    );
+    final uri = Uri.parse(apiUrl);
 
     final payload = <String, dynamic>{
       'model': model,
@@ -70,7 +63,8 @@ class VivoFoodVisionService {
             {
               'type': 'image_url',
               'image_url': {
-                'url': 'data:${image.mimeType ?? "image/jpeg"};base64,$base64Image',
+                'url':
+                    'data:${image.mimeType ?? "image/jpeg"};base64,$base64Image',
               },
             },
           ],
@@ -92,7 +86,7 @@ class VivoFoodVisionService {
       final responseBody = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw VivoFoodVisionException(
-          'vivo AI request failed ($requestId): HTTP ${response.statusCode} $responseBody',
+          '千问视觉请求失败（$requestId）：HTTP ${response.statusCode} $responseBody',
         );
       }
 
@@ -136,17 +130,21 @@ class VivoFoodVisionService {
     if (start == -1 || end == -1 || end <= start) {
       throw const VivoFoodVisionException('Response is not valid JSON.');
     }
-    return jsonDecode(content.substring(start, end + 1)) as Map<String, dynamic>;
+    return jsonDecode(content.substring(start, end + 1))
+        as Map<String, dynamic>;
   }
 
   static AnalysisResult _fromMap(Map<String, dynamic> map) {
-    final recommendations = (map['recommendations'] as List<dynamic>? ?? const [])
-        .map((item) => item.toString())
-        .where((item) => item.trim().isNotEmpty)
-        .toList();
+    final recommendations =
+        (map['recommendations'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .where((item) => item.trim().isNotEmpty)
+            .toList();
 
     final foodName = map['food_name']?.toString().trim();
-    final normalizedFood = (foodName == null || foodName.isEmpty) ? '未知餐食' : foodName;
+    final normalizedFood = (foodName == null || foodName.isEmpty)
+        ? '未知餐食'
+        : foodName;
 
     return AnalysisResult(
       foodName: normalizedFood,
@@ -169,7 +167,9 @@ class VivoFoodVisionService {
   static AnalysisResult _fallbackFromText(String content) {
     final lower = content.toLowerCase();
     final looksLikeHotpot =
-        lower.contains('hotpot') || content.contains('火锅') || content.contains('锅底');
+        lower.contains('hotpot') ||
+        content.contains('火锅') ||
+        content.contains('锅底');
     if (looksLikeHotpot) {
       return const AnalysisResult(
         foodName: '火锅',
@@ -262,7 +262,8 @@ class VivoFoodVisionService {
 
   static AnalysisResult _mockFromImage(XFile image) {
     final seed = image.path.codeUnits.fold<int>(0, (sum, item) => sum + item);
-    return DemoData.analysisCandidates[seed % DemoData.analysisCandidates.length];
+    return DemoData.analysisCandidates[seed %
+        DemoData.analysisCandidates.length];
   }
 }
 

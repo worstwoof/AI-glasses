@@ -186,7 +186,9 @@ class CaptureCoordinator {
       job.intent = intent.copyWith(
         taskId: retryTaskId,
         source: CaptureIntentSource.retake,
-        delay: Duration.zero,
+        delay: intent.captureType == CaptureType.packaging
+            ? const Duration(seconds: 1)
+            : Duration.zero,
       );
       job.state = CaptureTaskState.retrying;
       _emit();
@@ -317,8 +319,25 @@ class CaptureCoordinator {
     }
     job.state = CaptureTaskState.waitingAck;
     _acknowledgementTimer?.cancel();
-    _acknowledgementTimer = Timer(config.acknowledgementTimeout, () {
+    final timeout = job.intent.captureType == CaptureType.packaging
+        ? const Duration(seconds: 45)
+        : config.acknowledgementTimeout;
+    _acknowledgementTimer = Timer(timeout, () {
       if (_active == job && job.state == CaptureTaskState.waitingAck) {
+        if (job.intent.captureType == CaptureType.packaging) {
+          acknowledge(
+            CaptureAcknowledgement(
+              taskId: job.intent.taskId,
+              captureType: job.intent.captureType,
+              scene: job.intent.scene,
+              mealSessionId: job.intent.mealSessionId,
+            ),
+            const CaptureQualityResult.rejected([
+              CaptureQualityIssue.captureFailed,
+            ], shouldRetake: true),
+          );
+          return;
+        }
         _finishActive(
           CaptureTaskState.failed,
           message: 'capture acknowledgement timeout',

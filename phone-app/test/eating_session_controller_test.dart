@@ -166,69 +166,165 @@ void main() {
       expect(harness.intents, isEmpty);
     });
 
-    test('keeps sessions isolated from late acknowledgements after completion', () async {
-      var sessionNumber = 0;
-      final harness = _Harness(
-        sessionIdGenerator: () => 'meal_${++sessionNumber}',
-      );
-      addTearDown(harness.dispose);
+    test(
+      'automatic session supports a confirmed post-meal candidate',
+      () async {
+        final harness = _Harness(
+          sessionId: 'meal_auto_candidate',
+          automaticCooldown: Duration.zero,
+        );
+        addTearDown(harness.dispose);
 
-      await harness.startAndAccept();
-      final firstBefore = harness.intents.single;
-      harness.controller.onGesture('fist');
-      harness.controller.onGesture('fist');
-      await _pump();
-      final firstAfter = harness.intents.last;
-      expect(harness.acknowledge(taskId: firstAfter.taskId), isTrue);
-      await _pump();
-      expect(harness.controller.lastCompletedSessionId, 'meal_1');
+        final starting = harness.controller.startAutomaticSession();
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.starting);
+        expect(harness.intents.single.trigger, 'auto_food_scene');
+        expect(harness.intents.single.source, CaptureIntentSource.automatic);
+        expect(
+          harness.acknowledge(taskId: harness.intents.single.taskId),
+          isTrue,
+        );
+        await starting;
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.eating);
 
-      harness.controller.onGesture('open_palm');
-      harness.controller.onGesture('open_palm');
-      await _pump();
-      final secondBefore = harness.intents.last;
-      expect(secondBefore.mealSessionId, 'meal_2');
-      expect(secondBefore.taskId, isNot(firstBefore.taskId));
-      expect(secondBefore.taskId, isNot(firstAfter.taskId));
+        final candidate = harness.controller.requestAutomaticAfterCandidate();
+        await _pump();
+        expect(
+          harness.controller.state,
+          EatingSessionState.afterCandidateCapturing,
+        );
+        expect(harness.intents.last.scene, 'meal_after_candidate');
+        expect(
+          harness.acknowledge(taskId: harness.intents.last.taskId),
+          isTrue,
+        );
+        await candidate;
+        await _pump();
+        expect(
+          harness.controller.state,
+          EatingSessionState.afterCandidateReady,
+        );
 
-      expect(
-        harness.coordinator.acknowledge(
-          CaptureAcknowledgement(
-            taskId: firstAfter.taskId,
-            captureType: CaptureType.food,
-            scene: firstAfter.scene,
-            mealSessionId: firstAfter.mealSessionId,
+        harness.controller.confirmMealAfterCandidate();
+        expect(harness.controller.state, EatingSessionState.idle);
+        expect(
+          harness.controller.lastCompletedSessionId,
+          'meal_auto_candidate',
+        );
+      },
+    );
+
+    test(
+      'fist overrides an in-flight automatic candidate without orphaning it',
+      () async {
+        final harness = _Harness(
+          sessionId: 'meal_auto_override',
+          automaticCooldown: Duration.zero,
+        );
+        addTearDown(harness.dispose);
+
+        await harness.startAndAccept();
+        final candidate = harness.controller.requestAutomaticAfterCandidate();
+        await _pump();
+        expect(
+          harness.controller.state,
+          EatingSessionState.afterCandidateCapturing,
+        );
+
+        harness.controller.onGesture('fist');
+        harness.controller.onGesture('fist');
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.ending);
+        expect(harness.intents.last.scene, 'meal_after_candidate');
+
+        // The candidate command was already sent, so its ACK is allowed to
+        // finish before the critical meal-after command is dispatched.
+        expect(
+          harness.acknowledge(taskId: harness.intents.last.taskId),
+          isTrue,
+        );
+        await candidate;
+        await _pump();
+        expect(harness.intents.last.scene, 'meal_after');
+        expect(
+          harness.acknowledge(taskId: harness.intents.last.taskId),
+          isTrue,
+        );
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.idle);
+      },
+    );
+
+    test(
+      'keeps sessions isolated from late acknowledgements after completion',
+      () async {
+        var sessionNumber = 0;
+        final harness = _Harness(
+          sessionIdGenerator: () => 'meal_${++sessionNumber}',
+        );
+        addTearDown(harness.dispose);
+
+        await harness.startAndAccept();
+        final firstBefore = harness.intents.single;
+        harness.controller.onGesture('fist');
+        harness.controller.onGesture('fist');
+        await _pump();
+        final firstAfter = harness.intents.last;
+        expect(harness.acknowledge(taskId: firstAfter.taskId), isTrue);
+        await _pump();
+        expect(harness.controller.lastCompletedSessionId, 'meal_1');
+
+        harness.controller.onGesture('open_palm');
+        harness.controller.onGesture('open_palm');
+        await _pump();
+        final secondBefore = harness.intents.last;
+        expect(secondBefore.mealSessionId, 'meal_2');
+        expect(secondBefore.taskId, isNot(firstBefore.taskId));
+        expect(secondBefore.taskId, isNot(firstAfter.taskId));
+
+        expect(
+          harness.coordinator.acknowledge(
+            CaptureAcknowledgement(
+              taskId: firstAfter.taskId,
+              captureType: CaptureType.food,
+              scene: firstAfter.scene,
+              mealSessionId: firstAfter.mealSessionId,
+            ),
+            const CaptureQualityResult.accepted(),
           ),
-          const CaptureQualityResult.accepted(),
-        ),
-        isFalse,
-      );
-      expect(harness.controller.state, EatingSessionState.starting);
-      expect(harness.controller.mealSessionId, 'meal_2');
-      expect(harness.acknowledge(taskId: secondBefore.taskId), isTrue);
-      await _pump();
-      expect(harness.controller.state, EatingSessionState.eating);
-    });
+          isFalse,
+        );
+        expect(harness.controller.state, EatingSessionState.starting);
+        expect(harness.controller.mealSessionId, 'meal_2');
+        expect(harness.acknowledge(taskId: secondBefore.taskId), isTrue);
+        await _pump();
+        expect(harness.controller.state, EatingSessionState.eating);
+      },
+    );
 
-    test('connection loss recovers starting and ending without stale session state', () async {
-      final harness = _Harness(sessionId: 'meal_connection');
-      addTearDown(harness.dispose);
+    test(
+      'connection loss recovers starting and ending without stale session state',
+      () async {
+        final harness = _Harness(sessionId: 'meal_connection');
+        addTearDown(harness.dispose);
 
-      harness.controller.onGesture('open_palm');
-      harness.controller.onGesture('open_palm');
-      await _pump();
-      harness.controller.onConnectionLost();
-      expect(harness.controller.state, EatingSessionState.idle);
-      expect(harness.controller.mealSessionId, isNull);
+        harness.controller.onGesture('open_palm');
+        harness.controller.onGesture('open_palm');
+        await _pump();
+        harness.controller.onConnectionLost();
+        expect(harness.controller.state, EatingSessionState.idle);
+        expect(harness.controller.mealSessionId, isNull);
 
-      await harness.startAndAccept();
-      harness.controller.onGesture('fist');
-      harness.controller.onGesture('fist');
-      await _pump();
-      harness.controller.onConnectionLost();
-      expect(harness.controller.state, EatingSessionState.eating);
-      expect(harness.controller.mealSessionId, 'meal_connection');
-    });
+        await harness.startAndAccept();
+        harness.controller.onGesture('fist');
+        harness.controller.onGesture('fist');
+        await _pump();
+        harness.controller.onConnectionLost();
+        expect(harness.controller.state, EatingSessionState.eating);
+        expect(harness.controller.mealSessionId, 'meal_connection');
+      },
+    );
   });
 }
 
@@ -237,10 +333,12 @@ class _Harness {
     this.sessionId,
     this.sessionIdGenerator,
     this.acknowledgementTimeout = const Duration(seconds: 1),
+    this.automaticCooldown = const Duration(seconds: 8),
   }) {
     coordinator = CaptureCoordinator(
       config: CaptureCoordinatorConfig(
         acknowledgementTimeout: acknowledgementTimeout,
+        automaticCooldown: automaticCooldown,
       ),
       dispatch: (intent) async {
         intents.add(intent);
@@ -259,6 +357,7 @@ class _Harness {
   final String? sessionId;
   final SessionIdGenerator? sessionIdGenerator;
   final Duration acknowledgementTimeout;
+  final Duration automaticCooldown;
   final List<CaptureIntent> intents = <CaptureIntent>[];
   late final CaptureCoordinator coordinator;
   late final EatingSessionController controller;

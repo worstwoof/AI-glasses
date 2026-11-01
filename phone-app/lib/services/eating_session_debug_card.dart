@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'eating_session_controller.dart';
+import 'capture_mode_controller.dart';
 import 'glass_receiver_service.dart';
 
 class EatingSessionDebugCard extends StatelessWidget {
@@ -8,10 +9,14 @@ class EatingSessionDebugCard extends StatelessWidget {
     super.key,
     required this.snapshot,
     this.onCancel,
+    this.onConfirmCandidate,
+    this.onCancelCandidate,
   });
 
   final GlassReceiverSnapshot snapshot;
   final VoidCallback? onCancel;
+  final VoidCallback? onConfirmCandidate;
+  final VoidCallback? onCancelCandidate;
 
   @override
   Widget build(BuildContext context) {
@@ -21,6 +26,8 @@ class EatingSessionDebugCard extends StatelessWidget {
       EatingSessionState.idle => scheme.primary,
       EatingSessionState.starting => const Color(0xFFE39B64),
       EatingSessionState.eating => const Color(0xFF2A9D76),
+      EatingSessionState.afterCandidateCapturing => const Color(0xFFE39B64),
+      EatingSessionState.afterCandidateReady => const Color(0xFF5B7CFA),
       EatingSessionState.ending => const Color(0xFFE57E67),
     };
     final sessionId = session.mealSessionId ?? session.lastCompletedSessionId;
@@ -70,6 +77,22 @@ class EatingSessionDebugCard extends StatelessWidget {
             '采集模式：${_captureModeLabel(snapshot.captureMode.name)}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          Text(
+            '食品模型：${snapshot.foodModelAvailable ? '已加载' : snapshot.foodModelMessage}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (snapshot.foodProbability != null)
+            Text(
+              '食品概率：${snapshot.foodProbability!.toStringAsFixed(2)} · '
+              '${snapshot.autoMealMessage}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          if (session.state == EatingSessionState.eating &&
+              snapshot.captureMode != CaptureMode.manual)
+            Text(
+              '无手帧 ${snapshot.autoNoHandFrames} · 稳定帧 ${snapshot.autoStableFrames}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           const SizedBox(height: 4),
           Text(
             '已采集：餐前 ${snapshot.mealBeforeCapture == null ? 0 : 1} · '
@@ -85,6 +108,47 @@ class EatingSessionDebugCard extends StatelessWidget {
                 color: const Color(0xFFE57E67),
                 fontWeight: FontWeight.w700,
               ),
+            ),
+          ],
+          if (snapshot.mealAfterCandidateCapture != null &&
+              session.state == EatingSessionState.afterCandidateReady) ...[
+            const SizedBox(height: 12),
+            Text(
+              '餐后候选图片：确认后才用于剩余量分析',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            AspectRatio(
+              aspectRatio: 4 / 3,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.file(
+                  snapshot.mealAfterCandidateCapture!.imageFile,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onConfirmCandidate,
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('确认餐后'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onCancelCandidate,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('继续进食'),
+                  ),
+                ),
+              ],
             ),
           ],
           const Divider(height: 24),
